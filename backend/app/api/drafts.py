@@ -1,0 +1,65 @@
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.deps import draft_service
+from app.models.draft_reply import DraftReply
+from app.models.email import Email
+
+router = APIRouter(prefix="/drafts", tags=["drafts"])
+
+
+class DraftGenerateRequest(BaseModel):
+    email_id: int
+    tone: str = "professional"
+
+
+@router.post("/generate")
+def generate_draft(payload: DraftGenerateRequest, db: Session = Depends(get_db)):
+    email_row = db.query(Email).filter(Email.id == payload.email_id).first()
+    if not email_row:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    output = draft_service.generate_draft(
+        subject=email_row.subject,
+        body_text=email_row.body_text,
+        tone=payload.tone,
+    )
+
+    draft = DraftReply(
+        email_id=email_row.id,
+        draft_body=output.body,
+        tone=output.tone,
+        status="generated",
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
+    return {"draft_id": draft.id, "output": output.model_dump()}
+
+
+@router.post("/{draft_id}/create-in-gmail")
+def create_in_gmail(draft_id: int, db: Session = Depends(get_db)):
+    draft = db.query(DraftReply).filter(DraftReply.id == draft_id).first()
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    email_row = db.query(Email).filter(Email.id == draft.email_id).first()
+    if not email_row:
+        raise HTTPException(status_code=404, detail="Related email not found")
+
+    gmail_draft_id = draft_service.create_in_gmail(subject=f"Re: {email_row.subject or 'Email'}", body=draft.draft_body)
+    draft.gmail_draft_id = gmail_draft_id
+    draft.status = "created_in_gmail"
+    db.commit()
+
+    return {
+        "draft_id": draft.id,
+        "gmail_draft_id": gmail_draft_id,
+        "note": "Draft created in Gmail. Sending must be done manually by user.",
+        "created_at": datetime.utcnow(),
+    }
