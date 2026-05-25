@@ -2,75 +2,20 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.session import get_db
-from app.deps import telegram_bot_service, telegram_link_service, telegram_service
+from app.deps import telegram_bot_service, telegram_service
 from app.models.user import User
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
-class TelegramLinkStartRequest(BaseModel):
-    user_id: UUID
-
-
-class TelegramLinkConfirmRequest(BaseModel):
-    token: str = Field(min_length=8)
-    telegram_chat_id: str
-
-
-class TelegramLegacyLinkRequest(BaseModel):
-    user_id: UUID
-    telegram_chat_id: str
-
-
 class TelegramTestRequest(BaseModel):
     user_id: UUID
     message: str = "Telegram connectivity test from Gmail Agent Assistant."
-
-
-@router.post("/link/start")
-def start_link(payload: TelegramLinkStartRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == payload.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    result = telegram_link_service.create_link_token(db=db, user=user)
-    return {
-        "ok": True,
-        "token": result["token"],
-        "deep_link": result["deep_link"],
-        "expires_at": result["expires_at"],
-    }
-
-
-@router.post("/link/confirm")
-def confirm_link(payload: TelegramLinkConfirmRequest, db: Session = Depends(get_db)):
-    user = telegram_link_service.confirm_link(
-        db=db,
-        token=payload.token,
-        chat_id=payload.telegram_chat_id,
-    )
-    if not user:
-        raise HTTPException(status_code=400, detail="Link token invalid or expired")
-    return {"ok": True, "linked": True, "user_id": str(user.id), "telegram_chat_id": user.telegram_chat_id}
-
-
-@router.post("/link")
-def link_telegram_legacy(payload: TelegramLegacyLinkRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == payload.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.telegram_chat_id = payload.telegram_chat_id
-    user.telegram_link_token_hash = None
-    user.telegram_link_token_expires_at = None
-    db.add(user)
-    db.commit()
-    return {"linked": True, "telegram_chat_id": payload.telegram_chat_id, "legacy": True}
 
 
 @router.post("/webhook")

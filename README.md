@@ -23,7 +23,7 @@ This system never sends emails automatically.
                         |-- /actions/*   -> approve/reject/execute suggested actions
                         |-- /drafts/*    -> draft generation + create Gmail draft (no send)
                         |-- /rules/*     -> user rule management
-                        |-- /telegram/*  -> webhook + link token + link confirmation + test endpoint
+                        |-- /telegram/*  -> webhook + Telegram test endpoint
                         |
                         +--> [SQLAlchemy + Alembic] -> [Postgres]
                         +--> [Celery Worker + Beat] <-> [Redis]
@@ -64,15 +64,12 @@ Local services:
 - Migrations: `cd backend && alembic upgrade head`
 
 ## Telegram-First Setup/Test Flow
-1. Connect Gmail account (one-time OAuth):
-   - `POST /auth/google/start` to get `auth_url`
-   - Open `auth_url` in a browser and complete consent
-   - Google calls back to `GET /auth/google/callback`
-2. Create Telegram link token:
-   - `POST /telegram/link/start` with `user_id`
-3. Link chat in Telegram:
-   - Send `/start <token>` to your bot
-4. Operate only through Telegram:
+1. Open chat with your bot and send `/start`.
+2. Send `/connect` and click **Connect Gmail**.
+3. Complete Google OAuth consent in browser.
+4. Google calls back to `GET /auth/google/callback` and the backend auto-links your `telegram_chat_id`.
+5. Operate through Telegram:
+   - `/status`
    - `/sync`
    - `/digest`
    - `/pending`
@@ -110,9 +107,6 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 - `GET /rules`
 - `POST /rules`
 - `DELETE /rules/{rule_id}`
-- `POST /telegram/link`
-- `POST /telegram/link/start`
-- `POST /telegram/link/confirm`
 - `POST /telegram/webhook`
 - `POST /telegram/test`
 

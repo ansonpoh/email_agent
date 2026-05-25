@@ -74,7 +74,6 @@ class Settings:
     telegram_bot_username: str | None = os.getenv("TELEGRAM_BOT_USERNAME")
     telegram_webhook_base_url: str | None = _normalize_base_url(os.getenv("TELEGRAM_WEBHOOK_BASE_URL"))
     telegram_webhook_secret_token: str | None = os.getenv("TELEGRAM_WEBHOOK_SECRET_TOKEN")
-    telegram_link_token_ttl_minutes: int = int(os.getenv("TELEGRAM_LINK_TOKEN_TTL_MINUTES", "30"))
     telegram_default_digest_frequency: str = os.getenv("TELEGRAM_DEFAULT_DIGEST_FREQUENCY", "hourly")
     telegram_default_timezone: str = os.getenv("TELEGRAM_DEFAULT_TIMEZONE", "UTC")
     telegram_default_urgent_alerts_enabled: bool = _parse_bool(

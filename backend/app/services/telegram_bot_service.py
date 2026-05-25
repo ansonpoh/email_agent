@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app.models.agent_action import AgentAction
 from app.models.user import User
 from app.models.user_rule import UserRule
-from app.services.telegram_link_service import TelegramLinkService
+from app.services.gmail_service import GmailService
+from app.services.telegram_auth_state_service import TelegramAuthStateService
 from app.services.telegram_orchestration_service import TelegramOrchestrationService
 from app.services.telegram_service import TelegramService
 
@@ -14,11 +15,13 @@ class TelegramBotService:
     def __init__(
         self,
         telegram_service: TelegramService,
-        link_service: TelegramLinkService,
+        gmail_service: GmailService,
+        auth_state_service: TelegramAuthStateService,
         orchestration_service: TelegramOrchestrationService,
     ):
         self.telegram_service = telegram_service
-        self.link_service = link_service
+        self.gmail_service = gmail_service
+        self.auth_state_service = auth_state_service
         self.orchestration_service = orchestration_service
 
     def handle_update(self, db: Session, update: dict) -> dict:
@@ -32,28 +35,37 @@ class TelegramBotService:
             return {"ok": True, "ignored": True}
 
         if text.startswith("/start"):
-            parts = text.split(maxsplit=1)
-            token = parts[1].strip() if len(parts) > 1 else ""
-            if not token:
+            user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+            if user:
                 self.telegram_service.send_message(
                     chat_id=chat_id,
-                    text="Welcome. Use your link token from backend setup: /start <token>",
+                    text=f"Welcome back. Linked to {user.email}. Send /help for commands.",
                 )
-                return {"ok": True, "message": "start_without_token"}
+                return {"ok": True, "message": "start_linked", "user_id": str(user.id)}
 
-            user = self.link_service.confirm_link(db=db, token=token, chat_id=chat_id)
-            if not user:
-                self.telegram_service.send_message(chat_id=chat_id, text="Link token invalid or expired.")
-                return {"ok": True, "message": "link_failed"}
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text="Welcome. To connect Gmail, send /connect.",
+            )
+            return {"ok": True, "message": "start_unlinked"}
 
-            self.telegram_service.send_message(chat_id=chat_id, text=f"Linked successfully to {user.email}.")
-            return {"ok": True, "message": "linked", "user_id": str(user.id)}
+        if text == "/connect":
+            state = self.auth_state_service.create(chat_id=chat_id)
+            auth_url = self.gmail_service.get_google_oauth_start_url(state=state)
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text="Connect your Gmail account:",
+                reply_markup={
+                    "inline_keyboard": [[{"text": "Connect Gmail", "url": auth_url}]],
+                },
+            )
+            return {"ok": True, "message": "connect_prompted"}
 
         user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
         if not user:
             self.telegram_service.send_message(
                 chat_id=chat_id,
-                text="This chat is not linked. Generate a /start link token from backend setup first.",
+                text="This chat is not linked. Send /connect to connect Gmail.",
             )
             return {"ok": True, "message": "unlinked_chat"}
 
@@ -62,6 +74,8 @@ class TelegramBotService:
                 chat_id=chat_id,
                 text=(
                     "Commands:\n"
+                    "/connect - connect or reconnect Gmail\n"
+                    "/status - show linked account\n"
                     "/sync - sync inbox and analyze new messages\n"
                     "/digest - send latest digest\n"
                     "/pending - list pending approvals\n"
@@ -71,6 +85,13 @@ class TelegramBotService:
                 ),
             )
             return {"ok": True, "message": "help"}
+
+        if text == "/status":
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text=f"Linked account: {user.email}",
+            )
+            return {"ok": True, "message": "status", "user_id": str(user.id)}
 
         if text == "/sync":
             result = self.orchestration_service.sync_and_analyze(db=db, user=user)

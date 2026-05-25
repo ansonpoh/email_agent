@@ -4,8 +4,8 @@ from app.services.digest_service import DigestService
 from app.services.draft_service import DraftService
 from app.services.gmail_service import GmailService
 from app.services.pipeline_service import PipelineService
+from app.services.telegram_auth_state_service import TelegramAuthStateService
 from app.services.telegram_bot_service import TelegramBotService
-from app.services.telegram_link_service import TelegramLinkService
 from app.services.telegram_orchestration_service import TelegramOrchestrationService
 from app.services.telegram_service import TelegramService
 from app.services.token_cipher import token_cipher
@@ -18,7 +18,7 @@ draft_service = DraftService(gmail_service=gmail_service)
 telegram_service = TelegramService()
 action_execution_service = ActionExecutionService(draft_service=draft_service)
 pipeline_service = PipelineService(gmail_service=gmail_service, digest_service=digest_service)
-telegram_link_service = TelegramLinkService()
+telegram_auth_state_service = TelegramAuthStateService()
 telegram_orchestration_service = TelegramOrchestrationService(
     pipeline_service=pipeline_service,
     agent_service=agent_service,
@@ -27,6 +27,7 @@ telegram_orchestration_service = TelegramOrchestrationService(
 )
 telegram_bot_service = TelegramBotService(
     telegram_service=telegram_service,
-    link_service=telegram_link_service,
+    gmail_service=gmail_service,
+    auth_state_service=telegram_auth_state_service,
     orchestration_service=telegram_orchestration_service,
 )

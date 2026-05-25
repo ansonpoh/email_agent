@@ -33,6 +33,12 @@ def test_send_email_endpoint_is_not_exposed():
     assert response.status_code in (404, 405)
 
 
+def test_legacy_telegram_link_endpoints_are_removed():
+    assert client.post("/telegram/link").status_code in (404, 405)
+    assert client.post("/telegram/link/start").status_code in (404, 405)
+    assert client.post("/telegram/link/confirm").status_code in (404, 405)
+
+
 def test_cors_preflight_is_not_enabled_by_default():
     local_app = FastAPI()
     configure_cors(local_app, [])
