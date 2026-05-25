@@ -113,6 +113,7 @@ def _linked_user(chat_id: str):
         email="linked@example.com",
         telegram_chat_id=chat_id,
         scheduled_digest_enabled=False,
+        digest_schedule_count=None,
         digest_schedule_times=[],
         timezone="UTC",
     )
@@ -284,7 +285,7 @@ def test_today_handles_orchestration_failure():
     assert telegram.messages[-1]["text"] == "Unable to generate today's summary right now. Please try again."
 
 
-def test_digest_schedule_set_auto_enables_and_sorts_times():
+def test_digest_schedule_country_sets_timezone_for_single_timezone_country():
     user = _linked_user("1008")
     db = _FakeDb(users=[user])
     telegram = _FakeTelegramService()
@@ -292,14 +293,13 @@ def test_digest_schedule_set_auto_enables_and_sorts_times():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule set 19:00,09:00,14:00", "chat": {"id": "1008"}}},
+        update={"message": {"text": "/digest_schedule country Singapore", "chat": {"id": "1008"}}},
     )
-    assert result["message"] == "digest_schedule_set"
-    assert user.scheduled_digest_enabled is True
-    assert user.digest_schedule_times == ["09:00", "14:00", "19:00"]
+    assert result["message"] == "digest_schedule_country_set"
+    assert user.timezone == "Asia/Singapore"
 
 
-def test_digest_schedule_rejects_duplicate_times():
+def test_digest_schedule_country_uses_capital_override_for_multi_timezone_country():
     user = _linked_user("1009")
     db = _FakeDb(users=[user])
     telegram = _FakeTelegramService()
@@ -307,26 +307,139 @@ def test_digest_schedule_rejects_duplicate_times():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule set 09:00,09:00", "chat": {"id": "1009"}}},
+        update={"message": {"text": "/digest_schedule country USA", "chat": {"id": "1009"}}},
+    )
+    assert result["message"] == "digest_schedule_country_set"
+    assert user.timezone == "America/New_York"
+
+
+def test_digest_schedule_count_accepts_1_to_3_and_rejects_invalid():
+    user = _linked_user("1010")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    ok_result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule count 2", "chat": {"id": "1010"}}},
+    )
+    assert ok_result["message"] == "digest_schedule_count_set"
+    assert user.digest_schedule_count == 2
+    assert user.scheduled_digest_enabled is False
+
+    invalid_result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule count 4", "chat": {"id": "1010"}}},
+    )
+    assert invalid_result["message"] == "digest_schedule_invalid"
+    assert telegram.messages[-1]["text"] == "Count must be between 1 and 3."
+
+
+def test_digest_schedule_times_parses_12h_and_enables_schedule():
+    user = _linked_user("1011")
+    user.digest_schedule_count = 2
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1011"}}},
+    )
+    assert result["message"] == "digest_schedule_set"
+    assert user.scheduled_digest_enabled is True
+    assert user.digest_schedule_times == ["08:00", "13:00"]
+
+
+def test_digest_schedule_times_count_mismatch_preserves_previous_schedule():
+    user = _linked_user("1012")
+    user.digest_schedule_count = 3
+    user.digest_schedule_times = ["08:00", "13:00", "18:00"]
+    user.scheduled_digest_enabled = True
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1012"}}},
     )
     assert result["message"] == "digest_schedule_invalid"
-    assert telegram.messages[-1]["text"] == "Duplicate times are not allowed."
+    assert user.digest_schedule_times == ["08:00", "13:00", "18:00"]
+    assert user.scheduled_digest_enabled is True
 
 
-def test_digest_schedule_status_displays_toggle_timezone_and_times():
-    user = _linked_user("1010")
+def test_digest_schedule_old_set_format_is_rejected():
+    user = _linked_user("1013")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule set 09:00", "chat": {"id": "1013"}}},
+    )
+    assert result["message"] == "digest_schedule_usage"
+
+
+def test_digest_schedule_on_rejects_until_count_and_times_are_complete():
+    user = _linked_user("1014")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    first = service.handle_update(db=db, update={"message": {"text": "/digest_schedule on", "chat": {"id": "1014"}}})
+    assert first["message"] == "digest_schedule_on_missing_count"
+
+    user.digest_schedule_count = 2
+    second = service.handle_update(db=db, update={"message": {"text": "/digest_schedule on", "chat": {"id": "1014"}}})
+    assert second["message"] == "digest_schedule_on_missing_times"
+
+
+def test_digest_schedule_three_step_flow_auto_enables_schedule():
+    user = _linked_user("1015")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    country_result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule country Singapore", "chat": {"id": "1015"}}},
+    )
+    count_result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule count 2", "chat": {"id": "1015"}}},
+    )
+    times_result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1015"}}},
+    )
+
+    assert country_result["message"] == "digest_schedule_country_set"
+    assert count_result["message"] == "digest_schedule_count_set"
+    assert times_result["message"] == "digest_schedule_set"
+    assert user.scheduled_digest_enabled is True
+    assert user.timezone == "Asia/Singapore"
+    assert user.digest_schedule_count == 2
+    assert user.digest_schedule_times == ["08:00", "13:00"]
+
+
+def test_digest_schedule_status_displays_toggle_timezone_count_and_times():
+    user = _linked_user("1016")
     user.scheduled_digest_enabled = True
+    user.digest_schedule_count = 2
     user.digest_schedule_times = ["14:00", "09:00"]
     user.timezone = "Asia/Singapore"
     db = _FakeDb(users=[user])
     telegram = _FakeTelegramService()
     service = _build_service(telegram)
 
-    result = service.handle_update(db=db, update={"message": {"text": "/digest_schedule status", "chat": {"id": "1010"}}})
+    result = service.handle_update(db=db, update={"message": {"text": "/digest_schedule status", "chat": {"id": "1016"}}})
     assert result["message"] == "digest_schedule_status"
     text = telegram.messages[-1]["text"]
     assert "Digest schedule is enabled." in text
     assert "Timezone: Asia/Singapore" in text
+    assert "Count: 2" in text
     assert "Times: 09:00, 14:00" in text
 
 

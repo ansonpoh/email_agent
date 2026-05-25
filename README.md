@@ -77,7 +77,9 @@ Notes:
    - `/sync`
    - `/today`
    - `/digest`
-   - `/digest_schedule set HH:MM[,HH:MM[,HH:MM]]`
+   - `/digest_schedule country <country>`
+   - `/digest_schedule count <1-3>`
+   - `/digest_schedule times <8am,1pm[,6pm]>`
    - `/digest_schedule status`
    - `/digest_schedule on`
    - `/digest_schedule off`

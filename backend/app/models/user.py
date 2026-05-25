@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,7 @@ class User(Base):
     telegram_link_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     digest_frequency: Mapped[str] = mapped_column(String(32), default="hourly", nullable=False)
     scheduled_digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    digest_schedule_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     digest_schedule_times: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     urgent_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)

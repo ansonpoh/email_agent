@@ -71,6 +71,8 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
                 if existing.scheduled_digest_enabled is not None
                 else False
             )
+            if existing.digest_schedule_count is not None and not (1 <= int(existing.digest_schedule_count) <= 3):
+                existing.digest_schedule_count = None
             if existing.digest_schedule_times is None:
                 existing.digest_schedule_times = []
             existing.urgent_alerts_enabled = (
@@ -97,6 +99,7 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
                 encrypted_refresh_token=token_cipher.encrypt(refresh_token),
                 digest_frequency=settings.telegram_default_digest_frequency,
                 scheduled_digest_enabled=False,
+                digest_schedule_count=None,
                 digest_schedule_times=[],
                 urgent_alerts_enabled=settings.telegram_default_urgent_alerts_enabled,
                 timezone=settings.telegram_default_timezone,
