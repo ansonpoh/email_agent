@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,8 +27,8 @@ class EmailBase(BaseModel):
 
 
 class EmailRead(EmailBase):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     gmail_message_id: str
     gmail_thread_id: str
     created_at: datetime
@@ -36,11 +37,11 @@ class EmailRead(EmailBase):
 
 
 class EmailSyncRequest(BaseModel):
-    user_id: int
+    user_id: UUID
 
 
 class EmailAnalysisResponse(BaseModel):
-    email_id: int
+    email_id: UUID
     analysis: EmailAnalysisOutput
 
 

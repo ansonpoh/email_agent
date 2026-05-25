@@ -1,16 +1,24 @@
 from datetime import datetime
+import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
+from app.db.schema import schema_fk
 
 
 class DraftReply(Base):
     __tablename__ = "draft_replies"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    email_id: Mapped[int] = mapped_column(ForeignKey("emails.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, index=True, default=uuid.uuid4)
+    email_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(schema_fk("emails"), ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     draft_body: Mapped[str] = mapped_column(Text, nullable=False)
     tone: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="generated", nullable=False)

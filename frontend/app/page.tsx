@@ -1,28 +1,28 @@
 export default function DashboardPage() {
   const cards = [
     {
-      title: "Inbox sync",
-      value: "Ready",
-      description: "Sync emails since the last check-in with /emails/sync.",
+      title: "Primary interface",
+      value: "Telegram",
+      description: "Use /sync, /digest, /pending and inline approval buttons from Telegram.",
     },
     {
-      title: "AI analysis",
-      value: "Placeholder",
-      description: "Summaries, priority score, tasks and deadlines are generated per email.",
+      title: "Automation",
+      value: "Hourly",
+      description: "Celery beat runs hourly sync + analysis + digest for linked Telegram users.",
     },
     {
-      title: "Telegram digest",
-      value: "Manual trigger",
-      description: "Generate digest first, then send to Telegram via explicit endpoint call.",
+      title: "This web app",
+      value: "Setup/Status",
+      description: "Use this UI for OAuth, Telegram linking, and operational checks.",
     },
   ];
 
   return (
     <section className="space-y-5">
       <header>
-        <h2 className="text-2xl font-semibold">Dashboard</h2>
+        <h2 className="text-2xl font-semibold">Status Dashboard</h2>
         <p className="mt-1 text-sm text-slate-600">
-          MVP control panel for Gmail-only ingestion, AI-assisted triage, and manual review workflows.
+          Telegram is the primary control plane. This page summarizes operational mode and safety guarantees.
         </p>
       </header>
 

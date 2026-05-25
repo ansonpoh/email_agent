@@ -1,10 +1,11 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
 class DigestBucketItem(BaseModel):
-    email_id: int
+    email_id: UUID
     subject: str
     sender_email: str
     note: str
@@ -20,16 +21,16 @@ class DigestOutput(BaseModel):
 
 
 class DigestGenerateRequest(BaseModel):
-    user_id: int
+    user_id: UUID
 
 
 class DigestSendTelegramRequest(BaseModel):
-    user_id: int
+    user_id: UUID
 
 
 class DigestRead(BaseModel):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     period_start: datetime
     period_end: datetime
     digest_text: str

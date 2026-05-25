@@ -1,6 +1,6 @@
-# Gmail Agent Assistant (MVP Skeleton)
+ï»¿# Gmail Agent Assistant
 
-Personal, Gmail-only, full-stack assistant for inbox triage, digesting, and draft suggestion with strict manual control.
+Personal, Gmail-only assistant with Telegram-first operations for inbox triage, digesting, and draft suggestion under strict manual-send control.
 
 ## Explicit Safety Guarantee
 This system never sends emails automatically.
@@ -10,7 +10,7 @@ This system never sends emails automatically.
 - Drafts can be generated and created in Gmail, but final send happens manually by the user in Gmail.
 
 ## Project Overview
-The app syncs Gmail emails since the user last checked in, stores metadata/body in Postgres, runs AI-style structured analysis, tracks suggested actions in an audit log, and sends digest summaries to Telegram on explicit trigger.
+The app is Telegram-first: users control sync, digesting, and approvals from Telegram commands and inline buttons. It syncs Gmail metadata/body into Postgres, runs structured AI analysis, tracks suggested actions in an audit log, and keeps email sending manual (draft-only automation).
 
 ## Architecture (Text Diagram)
 
@@ -20,139 +20,76 @@ The app syncs Gmail emails since the user last checked in, stores metadata/body 
    | HTTP (REST)
    v
 [FastAPI Backend]
-   |-- /auth/*           -> Google OAuth flow (TODO wiring)
-   |-- /emails/*         -> Gmail sync + stored email retrieval
+   |-- /auth/*           -> Google OAuth flow
+   |-- /emails/*         -> Gmail sync + stored email retrieval + analysis
    |-- /digests/*        -> digest generation + Telegram dispatch
-   |-- /actions/*        -> approve/reject suggested agent actions
+   |-- /actions/*        -> approve/reject/execute suggested agent actions
    |-- /drafts/*         -> draft generation + create Gmail draft (no send)
    |-- /rules/*          -> user rule management
-   |-- /telegram/*       -> chat link + test endpoint
+   |-- /telegram/*       -> webhook command handling + secure chat link + test endpoint
    |
-   +--> [SQLAlchemy Models + Alembic Migrations] -> [Postgres (Neon in prod)]
-   +--> [Celery Worker] <-> [Redis]
-   +--> [OpenAI API (structured outputs) - TODO production wiring]
-   +--> [Gmail API (read + draft only) - TODO production wiring]
+   +--> [SQLAlchemy Models + Alembic Migrations] -> [Postgres]
+   +--> [Celery Worker + Beat] <-> [Redis]
+   +--> [OpenAI API (structured outputs)]
+   +--> [Gmail API (read + draft only)]
    +--> [Telegram Bot API]
 ```
 
 ## Tech Stack
 - Frontend: Next.js + TypeScript + Tailwind CSS
 - Backend: Python + FastAPI
-- Database: Postgres (Neon target, local Postgres in Docker Compose)
+- Database: Postgres
 - ORM/Migrations: SQLAlchemy + Alembic
 - Background Jobs: Redis + Celery
 - AI: OpenAI API (structured JSON outputs)
 - Email: Gmail API
-- Notifications: Telegram Bot API
-
-## Repository Structure
-
-```text
-.
-+- frontend/
-¦  +- app/
-¦  ¦  +- page.tsx
-¦  ¦  +- emails-summary/page.tsx
-¦  ¦  +- suggested-actions/page.tsx
-¦  ¦  +- draft-review/page.tsx
-¦  ¦  +- settings/page.tsx
-¦  +- components/app-shell.tsx
-¦  +- lib/api.ts
-+- backend/
-¦  +- app/
-¦  ¦  +- main.py
-¦  ¦  +- api/
-¦  ¦  +- services/
-¦  ¦  +- models/
-¦  ¦  +- schemas/
-¦  ¦  +- db/
-¦  ¦  +- workers/
-¦  +- alembic/
-¦  +- tests/
-+- docker-compose.yml
-+- .env.example
-+- README.md
-```
+- Notifications/Control: Telegram Bot API
 
 ## Setup Instructions
 1. Copy env template:
-   - `cp .env.example .env` (or on PowerShell: `Copy-Item .env.example .env`)
+   - `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`)
 2. Fill required values in `.env`:
    - Google OAuth credentials
    - OpenAI API key
-   - Telegram bot token
-   - Database URL (Neon recommended for real usage)
+   - Telegram bot token (+ optional bot username)
+   - Telegram webhook base URL + secret token for webhook validation
+   - Database URL
 3. Install frontend dependencies:
    - `cd frontend && npm install`
 4. Install backend dependencies:
    - `cd backend && pip install -r requirements.txt`
 
-## Environment Variables
-See `.env.example` for all variables.
+## Run
 
-Key ones:
-- `DATABASE_URL`
-- `REDIS_URL`
-- `OPENAI_API_KEY`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI`
-- `TELEGRAM_BOT_TOKEN`
-- `ENCRYPTION_KEY`
+Docker Compose:
+- `docker compose up --build`
 
-## Run with Docker Compose
-1. Ensure `.env` exists.
-2. Run:
-   - `docker compose up --build`
-3. Services:
-   - Frontend: `http://localhost:3000`
-   - Backend: `http://localhost:8000`
-   - Redis: `localhost:6379`
-   - Postgres: `localhost:5432`
+Local split:
+- Frontend: `cd frontend && npm run dev`
+- Backend API: `cd backend && uvicorn app.main:app --reload`
+- Celery worker: `cd backend && celery -A app.workers.tasks worker --loglevel=info`
+- Celery beat: `cd backend && celery -A app.workers.tasks beat --loglevel=info`
+- Migrations: `cd backend && alembic upgrade head`
 
-## Run Frontend and Backend Separately
+## Current Scope
+- Gmail read + draft creation integration (no auto-send)
+- Google OAuth start/callback with encrypted token storage
+- Telegram webhook command handling (`/start`, `/help`, `/sync`, `/digest`, `/pending`, `/rules`, `/rule add`, `/rule del`)
+- Inline Telegram approve/reject callbacks for pending actions
+- Hourly Telegram automation via Celery beat with scheduled idempotency
+- Rule-aware AI analysis and draft generation
 
-Frontend:
-- `cd frontend`
-- `npm run dev`
+## Telegram Webhook Setup
+- Set `TELEGRAM_WEBHOOK_BASE_URL` to your public HTTPS backend base URL (example: `https://agent.example.com`).
+- Set `TELEGRAM_WEBHOOK_SECRET_TOKEN` to a strong random secret.
+- On backend startup, the app auto-registers Telegram webhook URL as:
+  - `<TELEGRAM_WEBHOOK_BASE_URL>/telegram/webhook`
+- Telegram delivers webhook updates only to public HTTPS endpoints. Localhost is not reachable by Telegram unless exposed via a secure tunnel/reverse proxy.
+- Verify webhook status with Telegram API:
 
-Backend:
-- `cd backend`
-- `uvicorn app.main:app --reload`
-
-Worker:
-- `cd backend`
-- `celery -A app.workers.tasks worker --loglevel=info`
-
-Migrations:
-- `cd backend`
-- `alembic upgrade head`
-
-## Current MVP Scope
-- Gmail-only integration scaffolding
-- OAuth start/callback route placeholders
-- Email sync/analyse/digest/draft/rules/telegram endpoint skeleton
-- SQLAlchemy models for all required entities
-- Alembic initial migration
-- Typed Pydantic schemas for AI outputs
-- Basic tests for schema and service logic
-
-## Future Roadmap
-- Real OAuth token exchange + token encryption at rest
-- Real Gmail API sync with pagination and incremental history IDs
-- OpenAI structured output calls with strong prompt templates and retries
-- Per-user scheduling with Celery beat
-- Rich frontend tables/forms/state management
-- Full auth/session model for multi-user access control
-- Production deployment manifests and observability
-
-## Security Notes
-- Do not commit `.env`.
-- Use env vars only; no hardcoded secrets.
-- Restrict OAuth scopes to Gmail read/draft workflows.
-- Keep audit log (`agent_actions`) for all AI suggestions/decisions.
-- Enforce manual approval for actionable suggestions.
-- Maintain explicit prohibition on automatic email sending.
+```bash
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
+```
 
 ## Backend API Endpoints
 - `GET /health`
@@ -174,11 +111,15 @@ Migrations:
 - `POST /rules`
 - `DELETE /rules/{rule_id}`
 - `POST /telegram/link`
+- `POST /telegram/link/start`
+- `POST /telegram/link/confirm`
+- `POST /telegram/webhook`
 - `POST /telegram/test`
 
-## Notes on Placeholders
-Files include `TODO` markers where real credentials/API integrations are required:
-- Google OAuth token exchange
-- Gmail API read/draft calls
-- OpenAI structured model calls
-- Telegram live message dispatch
+## Security Notes
+- Do not commit `.env`.
+- Use env vars only; no hardcoded secrets.
+- Restrict OAuth scopes to Gmail read/draft workflows.
+- Keep audit log (`agent_actions`) for AI suggestions and decisions.
+- Enforce manual approval for actionable suggestions.
+- Maintain explicit prohibition on automatic email sending.

@@ -1,11 +1,8 @@
 import Link from "next/link";
 
 const navItems = [
-  { href: "/", label: "Dashboard" },
-  { href: "/emails-summary", label: "Emails Summary" },
-  { href: "/suggested-actions", label: "Suggested Actions" },
-  { href: "/draft-review", label: "Draft Review" },
-  { href: "/settings", label: "Rules & Settings" },
+  { href: "/", label: "Status" },
+  { href: "/settings", label: "Setup" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -14,8 +11,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Personal Gmail Assistant</p>
-            <h1 className="text-lg font-semibold">Agent Console</h1>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Telegram-First Gmail Agent</p>
+            <h1 className="text-lg font-semibold">Setup & Status Console</h1>
           </div>
           <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
             Manual send only

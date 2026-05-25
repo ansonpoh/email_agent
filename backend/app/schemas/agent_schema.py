@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from uuid import UUID
 
 
 class DraftReplyOutput(BaseModel):
@@ -9,7 +10,7 @@ class DraftReplyOutput(BaseModel):
 
 
 class AgentDecisionLog(BaseModel):
-    email_id: int
+    email_id: UUID
     decision_type: str
     reason: str
     requires_approval: bool

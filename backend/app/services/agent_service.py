@@ -1,41 +1,80 @@
+import logging
+from typing import Any
+
+from fastapi import HTTPException
+from openai import OpenAI
+from openai import APIError, APITimeoutError, RateLimitError
+
+from app.config import settings
 from app.schemas.email_schema import EmailAnalysisOutput
 
 
 class AgentService:
     """Agent logic for structured email analysis."""
 
-    def analyse_email(self, subject: str | None, body_text: str) -> EmailAnalysisOutput:
-        # TODO: Replace with OpenAI structured output call once OPENAI_API_KEY is configured.
-        text = f"{subject or ''} {body_text}".lower()
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self._client: OpenAI | None = None
 
-        priority = 3
-        category = "general"
-        extracted_tasks: list[str] = []
-        extracted_deadlines: list[str] = []
+    def analyse_email(self, subject: str | None, body_text: str, user_rules: list[str] | None = None) -> EmailAnalysisOutput:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
 
-        if "urgent" in text or "asap" in text:
-            priority = 5
-            category = "urgent"
-        elif "invoice" in text or "payment" in text:
-            priority = 4
-            category = "finance"
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
 
-        if "please" in text or "can you" in text:
-            extracted_tasks.append("Respond to sender request")
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.2,
+                    messages=self._messages(subject=subject, body_text=body_text, user_rules=user_rules or []),
+                    response_format=EmailAnalysisOutput,
+                )
 
-        if "tomorrow" in text:
-            extracted_deadlines.append("Tomorrow")
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed response was empty.")
+                return parsed
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning("OpenAI analyse_email attempt %s/%s failed: %s", attempt, max_attempts, exc)
 
-        summary = (body_text[:200] + "...") if len(body_text) > 200 else body_text
-        key_points = [summary] if summary else []
-
-        return EmailAnalysisOutput(
-            category=category,
-            priority_score=priority,
-            summary=summary or "No body text available.",
-            key_points=key_points,
-            extracted_tasks=extracted_tasks,
-            extracted_deadlines=extracted_deadlines,
-            suggested_action="Draft a concise reply and confirm timeline.",
-            confidence_score=0.65,
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI structured analysis failed after retries: {last_error}",
         )
+
+    def _client_instance(self) -> OpenAI:
+        if self._client is None:
+            self._client = OpenAI(
+                api_key=settings.openai_api_key,
+                timeout=settings.openai_timeout_seconds,
+                max_retries=0,
+            )
+        return self._client
+
+    @staticmethod
+    def _messages(subject: str | None, body_text: str, user_rules: list[str]) -> list[dict[str, Any]]:
+        rules_text = "\n".join(f"- {rule}" for rule in user_rules if rule.strip())
+        rules_suffix = (
+            f"\n\nRespect these user rules when proposing actions:\n{rules_text}"
+            if rules_text
+            else "\n\nNo custom user rules provided."
+        )
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You analyze inbound emails for a personal assistant tool. "
+                    "Return concise, high-signal structured output. "
+                    "Use priority_score from 1 (low) to 5 (critical). "
+                    "If information is missing, leave arrays empty and be explicit in summary."
+                    f"{rules_suffix}"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Subject: {subject or '(No subject)'}\n\nBody:\n{body_text}",
+            },
+        ]

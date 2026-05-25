@@ -3,7 +3,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 
-
+# Keep connection startup params minimal for managed poolers (e.g. Neon PgBouncer),
+# which reject `options=-csearch_path=...` in the startup packet.
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -1,17 +1,24 @@
 from datetime import datetime
+import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
+from app.db.schema import schema_fk
 
 
 class Email(Base):
     __tablename__ = "emails"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, index=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(schema_fk("users"), ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     gmail_message_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     gmail_thread_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sender_email: Mapped[str] = mapped_column(String(320), nullable=False)

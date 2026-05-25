@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.db.session import get_db
 from app.models.user import User
@@ -10,12 +11,12 @@ router = APIRouter(prefix="/rules", tags=["rules"])
 
 
 class RuleCreateRequest(BaseModel):
-    user_id: int
+    user_id: UUID
     rule_text: str
 
 
 @router.get("")
-def list_rules(user_id: int, db: Session = Depends(get_db)):
+def list_rules(user_id: UUID, db: Session = Depends(get_db)):
     rows = db.query(UserRule).filter(UserRule.user_id == user_id).order_by(UserRule.created_at.desc()).all()
     return {"items": rows}
 
@@ -34,7 +35,7 @@ def create_rule(payload: RuleCreateRequest, db: Session = Depends(get_db)):
 
 
 @router.delete("/{rule_id}")
-def delete_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_rule(rule_id: UUID, db: Session = Depends(get_db)):
     row = db.query(UserRule).filter(UserRule.id == rule_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Rule not found")

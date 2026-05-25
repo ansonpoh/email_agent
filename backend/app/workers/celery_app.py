@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import settings
 
@@ -14,4 +15,10 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "hourly-telegram-cycle": {
+            "task": "app.workers.tasks.run_hourly_telegram_cycle",
+            "schedule": crontab(minute=0),
+        }
+    },
 )
