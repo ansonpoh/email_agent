@@ -56,6 +56,7 @@ class Settings:
         )
     )
     database_schema: str = os.getenv("DATABASE_SCHEMA", "email_agent")
+    run_db_migrations_on_startup: bool = _parse_bool(os.getenv("RUN_DB_MIGRATIONS_ON_STARTUP", "true"), True)
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")

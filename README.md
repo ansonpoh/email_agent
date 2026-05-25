@@ -63,6 +63,10 @@ Local services:
 - Celery beat: `cd backend && celery -A app.workers.tasks beat --loglevel=info`
 - Migrations: `cd backend && alembic upgrade head`
 
+Notes:
+- Backend startup runs `alembic upgrade head` automatically by default (`RUN_DB_MIGRATIONS_ON_STARTUP=true`).
+- Set `RUN_DB_MIGRATIONS_ON_STARTUP=false` if you manage migrations separately in your deploy pipeline.
+
 ## Telegram-First Setup/Test Flow
 1. Open chat with your bot and send `/start`.
 2. Send `/connect` and click **Connect Gmail**.

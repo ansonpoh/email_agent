@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
 from app.api import actions, auth, digests, drafts, emails, rules, telegram
+from app.db.migrations import run_db_migrations
 from app.deps import telegram_service
 
 logger = logging.getLogger("email_agent")
@@ -22,6 +23,14 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if settings.run_db_migrations_on_startup:
+        try:
+            run_db_migrations()
+            logger.info("database_migrations_applied target=head")
+        except Exception:
+            logger.exception("database_migration_startup_failed")
+            raise
+
     try:
         telegram_service.register_webhook_from_settings()
     except Exception:
