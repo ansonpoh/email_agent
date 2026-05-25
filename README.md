@@ -75,6 +75,7 @@ Notes:
 5. Operate through Telegram:
    - `/status`
    - `/sync`
+   - `/today`
    - `/digest`
    - `/digest_schedule set HH:MM[,HH:MM[,HH:MM]]`
    - `/digest_schedule status`

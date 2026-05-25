@@ -119,6 +119,37 @@ class GmailService:
             incoming.append(parsed)
         return incoming
 
+    def fetch_primary_inbox_between(
+        self,
+        user: User,
+        db: Session,
+        start_utc: datetime,
+        end_utc: datetime,
+        limit: int = 50,
+    ) -> list[dict]:
+        safe_limit = max(1, min(limit, 50))
+        start_epoch = int(start_utc.astimezone(timezone.utc).timestamp())
+        end_epoch = int(end_utc.astimezone(timezone.utc).timestamp())
+        query = f"in:inbox category:primary after:{start_epoch} before:{end_epoch}"
+
+        response = self._gmail_request(
+            user=user,
+            db=db,
+            method="GET",
+            url="https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={"q": query, "maxResults": safe_limit},
+        )
+        payload = response.json()
+        messages = payload.get("messages", [])
+
+        incoming: list[dict] = []
+        for message in messages:
+            parsed = self._get_message_detail(user=user, message_id=message["id"], db=db)
+            incoming.append(parsed)
+
+        incoming.sort(key=lambda row: row.get("received_at", datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        return incoming[:safe_limit]
+
     def create_gmail_draft(self, user: User, db: Session, draft_body: str, subject: str) -> str:
         message = (
             f"Subject: {subject}\r\n"

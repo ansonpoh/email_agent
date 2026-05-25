@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -137,6 +138,49 @@ class TelegramOrchestrationService:
 
         db.commit()
         return {"sent": sent, "pending": len(actions)}
+
+    def generate_today_summary(self, db: Session, user: User) -> dict:
+        timezone_name = user.timezone or "UTC"
+        try:
+            tz = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            timezone_name = "UTC"
+            tz = ZoneInfo("UTC")
+
+        now_local = datetime.now(tz)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local = start_local + timedelta(days=1)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+
+        rows = self.pipeline_service.gmail_service.fetch_primary_inbox_between(
+            user=user,
+            db=db,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            limit=50,
+        )
+        if not rows:
+            return {
+                "empty": True,
+                "count": 0,
+                "timezone": timezone_name,
+                "start_local": start_local,
+                "end_local": end_local,
+            }
+
+        summary = self.agent_service.summarize_emails_for_today(
+            emails=rows,
+            user_timezone=timezone_name,
+        )
+        return {
+            "empty": False,
+            "count": len(rows),
+            "timezone": timezone_name,
+            "start_local": start_local,
+            "end_local": end_local,
+            "summary": summary,
+        }
 
     def apply_action_callback(
         self,

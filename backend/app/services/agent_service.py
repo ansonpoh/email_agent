@@ -6,7 +6,7 @@ from openai import OpenAI
 from openai import APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
-from app.schemas.email_schema import EmailAnalysisOutput
+from app.schemas.email_schema import EmailAnalysisOutput, TodaySummaryOutput
 
 
 class AgentService:
@@ -45,6 +45,35 @@ class AgentService:
             detail=f"OpenAI structured analysis failed after retries: {last_error}",
         )
 
+    def summarize_emails_for_today(self, emails: list[dict], user_timezone: str) -> TodaySummaryOutput:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.2,
+                    messages=self._today_summary_messages(emails=emails, user_timezone=user_timezone),
+                    response_format=TodaySummaryOutput,
+                )
+
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed summary response was empty.")
+                return parsed
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning("OpenAI summarize_emails_for_today attempt %s/%s failed: %s", attempt, max_attempts, exc)
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI today summary failed after retries: {last_error}",
+        )
+
     def _client_instance(self) -> OpenAI:
         if self._client is None:
             self._client = OpenAI(
@@ -76,5 +105,42 @@ class AgentService:
             {
                 "role": "user",
                 "content": f"Subject: {subject or '(No subject)'}\n\nBody:\n{body_text}",
+            },
+        ]
+
+    @staticmethod
+    def _today_summary_messages(emails: list[dict], user_timezone: str) -> list[dict[str, Any]]:
+        items: list[str] = []
+        for idx, row in enumerate(emails, start=1):
+            sender = str(row.get("sender_email") or "unknown@example.com")
+            subject = str(row.get("subject") or "(No subject)")
+            received_at = row.get("received_at")
+            received_label = str(received_at) if received_at is not None else "unknown"
+            status = "read" if row.get("is_read") else "unread"
+            snippet = str(row.get("snippet") or row.get("body_text") or "").replace("\n", " ").strip()
+            if len(snippet) > 200:
+                snippet = snippet[:200].rstrip() + "..."
+            items.append(
+                f"{idx}. from={sender}; subject={subject}; received={received_label}; status={status}; content={snippet}"
+            )
+
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You summarize today's inbox emails for a Telegram assistant. "
+                    "Return concise, high-signal output. Keep overview to 2-4 sentences. "
+                    "priority_items should highlight urgent or important threads. "
+                    "suggested_actions should be practical next actions, each under 140 characters."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Timezone: {user_timezone}\n"
+                    f"Emails today: {len(emails)}\n\n"
+                    "Email facts:\n"
+                    + "\n".join(items)
+                ),
             },
         ]

@@ -101,6 +101,79 @@ def test_agent_service_raises_when_api_key_missing(monkeypatch):
         service.analyse_email(subject="Hi", body_text="Body")
 
 
+def test_agent_service_today_summary_structured_output(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+
+    service = AgentService()
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        from app.schemas.email_schema import TodaySummaryOutput
+
+                        return _fake_completion(
+                            TodaySummaryOutput(
+                                overview="Two high-priority threads need action.",
+                                priority_items=["Legal review request", "Contract renewal notice"],
+                                suggested_actions=["Reply to legal team", "Schedule renewal follow-up"],
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.summarize_emails_for_today(
+        emails=[{"sender_email": "a@example.com", "subject": "Hi", "received_at": "2026-05-25T10:00:00Z"}],
+        user_timezone="UTC",
+    )
+    assert "high-priority" in result.overview
+    assert len(result.priority_items) == 2
+
+
+def test_agent_service_today_summary_retries_on_parse_failure(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+
+    service = AgentService()
+    calls = {"count": 0}
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        calls["count"] += 1
+                        if calls["count"] == 1:
+                            return _fake_completion(None)
+                        from app.schemas.email_schema import TodaySummaryOutput
+
+                        return _fake_completion(
+                            TodaySummaryOutput(
+                                overview="Inbox is mostly informational.",
+                                priority_items=[],
+                                suggested_actions=["Archive newsletters"],
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.summarize_emails_for_today(
+        emails=[{"sender_email": "a@example.com", "subject": "FYI"}],
+        user_timezone="Asia/Singapore",
+    )
+    assert result.overview == "Inbox is mostly informational."
+    assert calls["count"] == 2
+
+
+def test_agent_service_today_summary_raises_when_api_key_missing(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    service = AgentService()
+    with pytest.raises(HTTPException):
+        service.summarize_emails_for_today(emails=[{"subject": "Hi"}], user_timezone="UTC")
+
+
 def test_digest_service_builds_text():
     service = DigestService()
     output = service.build_digest(

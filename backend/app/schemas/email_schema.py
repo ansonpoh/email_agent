@@ -15,6 +15,12 @@ class EmailAnalysisOutput(BaseModel):
     confidence_score: float = Field(ge=0.0, le=1.0)
 
 
+class TodaySummaryOutput(BaseModel):
+    overview: str
+    priority_items: list[str] = Field(default_factory=list)
+    suggested_actions: list[str] = Field(default_factory=list)
+
+
 class EmailBase(BaseModel):
     sender_email: str
     sender_name: str | None = None

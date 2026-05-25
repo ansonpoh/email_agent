@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -14,6 +14,8 @@ from app.services.telegram_service import TelegramService
 
 
 class TelegramBotService:
+    TELEGRAM_MAX_MESSAGE_LEN = 4096
+
     def __init__(
         self,
         telegram_service: TelegramService,
@@ -79,6 +81,7 @@ class TelegramBotService:
                     "/connect - connect or reconnect Gmail\n"
                     "/status - show linked account\n"
                     "/latest - show 10 latest primary inbox emails\n"
+                    "/today - summarize today's primary inbox emails with AI\n"
                     "/sync - sync inbox and analyze new messages\n"
                     "/digest - send latest digest\n"
                     "/digest_schedule status|set|on|off - manage scheduled digests\n"
@@ -227,6 +230,32 @@ class TelegramBotService:
 
             self.telegram_service.send_message(chat_id=chat_id, text="\n".join(lines))
             return {"ok": True, "message": "latest", "count": len(rows[:10])}
+
+        if text == "/today":
+            try:
+                result = self.orchestration_service.generate_today_summary(db=db, user=user)
+            except Exception:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="Unable to generate today's summary right now. Please try again.",
+                )
+                return {"ok": True, "message": "today_failed"}
+
+            if result.get("empty"):
+                day = result["start_local"].strftime("%Y-%m-%d")
+                timezone_name = result.get("timezone", "UTC")
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text=f"No emails found in your Primary Inbox for {day} ({timezone_name}).",
+                )
+                return {"ok": True, "message": "today_empty"}
+
+            text_payload = self._format_today_summary_text(result)
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text=self._truncate_telegram_text(text_payload),
+            )
+            return {"ok": True, "message": "today", "count": int(result.get("count", 0))}
 
         if text == "/sync":
             result = self.orchestration_service.sync_and_analyze(db=db, user=user)
@@ -386,3 +415,55 @@ class TelegramBotService:
         if len(unique) != len(normalized):
             return [], "Duplicate times are not allowed."
         return unique, None
+
+    @staticmethod
+    def _summary_section_lines(items: list[str]) -> list[str]:
+        if not items:
+            return ["- None"]
+        return [f"- {item}" for item in items]
+
+    def _format_today_summary_text(self, result: dict) -> str:
+        summary = result.get("summary")
+        if summary is None:
+            return "Today's summary is unavailable. Please try again."
+
+        if isinstance(summary, dict):
+            overview = summary.get("overview") or "No overview provided."
+            priority_items = list(summary.get("priority_items") or [])
+            suggested_actions = list(summary.get("suggested_actions") or [])
+        else:
+            overview = getattr(summary, "overview", None) or "No overview provided."
+            priority_items = list(getattr(summary, "priority_items", None) or [])
+            suggested_actions = list(getattr(summary, "suggested_actions", None) or [])
+
+        timezone_name = str(result.get("timezone", "UTC"))
+        start_local = result.get("start_local")
+        day_label = start_local.strftime("%Y-%m-%d") if isinstance(start_local, datetime) else "today"
+        count = int(result.get("count", 0))
+
+        lines = [
+            "Today's AI Email Summary (Primary Inbox)",
+            f"Date: {day_label} ({timezone_name})",
+            f"Emails analyzed: {count}",
+            "",
+            "Overview:",
+            str(overview).strip(),
+            "",
+            "Priority items:",
+            *self._summary_section_lines(priority_items),
+            "",
+            "Suggested actions:",
+            *self._summary_section_lines(suggested_actions),
+        ]
+        return "\n".join(lines)
+
+    @classmethod
+    def _truncate_telegram_text(cls, text: str) -> str:
+        if len(text) <= cls.TELEGRAM_MAX_MESSAGE_LEN:
+            return text
+
+        suffix = "\n\n[Message truncated to fit Telegram limits.]"
+        max_body_length = cls.TELEGRAM_MAX_MESSAGE_LEN - len(suffix)
+        if max_body_length <= 0:
+            return text[: cls.TELEGRAM_MAX_MESSAGE_LEN]
+        return text[:max_body_length].rstrip() + suffix

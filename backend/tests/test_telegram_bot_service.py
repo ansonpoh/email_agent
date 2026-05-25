@@ -89,7 +89,22 @@ class _FakeAuthStateService:
 
 
 class _FakeOrchestrationService:
-    pass
+    def __init__(self, today_result=None, raise_on_today: bool = False):
+        self.today_result = today_result
+        self.raise_on_today = raise_on_today
+
+    def generate_today_summary(self, db, user):
+        if self.raise_on_today:
+            raise RuntimeError("today summary failed")
+        if self.today_result is not None:
+            return self.today_result
+        return {
+            "empty": True,
+            "count": 0,
+            "timezone": "UTC",
+            "start_local": datetime(2026, 5, 25, 0, 0, tzinfo=timezone.utc),
+            "end_local": datetime(2026, 5, 26, 0, 0, tzinfo=timezone.utc),
+        }
 
 
 def _linked_user(chat_id: str):
@@ -103,12 +118,12 @@ def _linked_user(chat_id: str):
     )
 
 
-def _build_service(telegram, gmail=None):
+def _build_service(telegram, gmail=None, orchestration=None):
     return TelegramBotService(
         telegram_service=telegram,
         gmail_service=gmail or _FakeGmailService(),
         auth_state_service=_FakeAuthStateService(),
-        orchestration_service=_FakeOrchestrationService(),
+        orchestration_service=orchestration or _FakeOrchestrationService(),
     )
 
 
@@ -154,6 +169,7 @@ def test_help_lists_latest_command():
     result = service.handle_update(db=db, update={"message": {"text": "/help", "chat": {"id": "1004"}}})
     assert result["message"] == "help"
     assert "/latest - show 10 latest primary inbox emails" in telegram.messages[-1]["text"]
+    assert "/today - summarize today's primary inbox emails with AI" in telegram.messages[-1]["text"]
 
 
 def test_latest_returns_compact_lines():
@@ -206,6 +222,66 @@ def test_latest_handles_gmail_failure():
     result = service.handle_update(db=db, update={"message": {"text": "/latest", "chat": {"id": "1007"}}})
     assert result["message"] == "latest_fetch_failed"
     assert telegram.messages[-1]["text"] == "Unable to fetch latest emails from Gmail right now. Please try again."
+
+
+def test_today_empty_state():
+    user = _linked_user("1012")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    orchestration = _FakeOrchestrationService(
+        today_result={
+            "empty": True,
+            "count": 0,
+            "timezone": "Asia/Singapore",
+            "start_local": datetime(2026, 5, 25, 0, 0, tzinfo=timezone.utc),
+            "end_local": datetime(2026, 5, 26, 0, 0, tzinfo=timezone.utc),
+        }
+    )
+    service = _build_service(telegram, orchestration=orchestration)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/today", "chat": {"id": "1012"}}})
+    assert result["message"] == "today_empty"
+    assert "No emails found in your Primary Inbox" in telegram.messages[-1]["text"]
+
+
+def test_today_success_summary():
+    user = _linked_user("1013")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    orchestration = _FakeOrchestrationService(
+        today_result={
+            "empty": False,
+            "count": 3,
+            "timezone": "UTC",
+            "start_local": datetime(2026, 5, 25, 0, 0, tzinfo=timezone.utc),
+            "end_local": datetime(2026, 5, 26, 0, 0, tzinfo=timezone.utc),
+            "summary": {
+                "overview": "Three important threads need review.",
+                "priority_items": ["Finance approval pending", "Customer escalation from Alice"],
+                "suggested_actions": ["Reply to Alice", "Review and approve invoice"],
+            },
+        }
+    )
+    service = _build_service(telegram, orchestration=orchestration)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/today", "chat": {"id": "1013"}}})
+    assert result["message"] == "today"
+    text = telegram.messages[-1]["text"]
+    assert "Today's AI Email Summary (Primary Inbox)" in text
+    assert "Emails analyzed: 3" in text
+    assert "Priority items:" in text
+    assert "Suggested actions:" in text
+
+
+def test_today_handles_orchestration_failure():
+    user = _linked_user("1014")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram, orchestration=_FakeOrchestrationService(raise_on_today=True))
+
+    result = service.handle_update(db=db, update={"message": {"text": "/today", "chat": {"id": "1014"}}})
+    assert result["message"] == "today_failed"
+    assert telegram.messages[-1]["text"] == "Unable to generate today's summary right now. Please try again."
 
 
 def test_digest_schedule_set_auto_enables_and_sorts_times():
