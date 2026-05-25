@@ -37,7 +37,7 @@ class TelegramBotService:
             if not token:
                 self.telegram_service.send_message(
                     chat_id=chat_id,
-                    text="Welcome. Use your link token from the web setup page: /start <token>",
+                    text="Welcome. Use your link token from backend setup: /start <token>",
                 )
                 return {"ok": True, "message": "start_without_token"}
 
@@ -53,7 +53,7 @@ class TelegramBotService:
         if not user:
             self.telegram_service.send_message(
                 chat_id=chat_id,
-                text="This chat is not linked. Open web setup and generate a /start link token first.",
+                text="This chat is not linked. Generate a /start link token from backend setup first.",
             )
             return {"ok": True, "message": "unlinked_chat"}
 

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
-from app.main import app
+from app.main import app, configure_cors
 
 client = TestClient(app)
 
@@ -32,9 +33,37 @@ def test_send_email_endpoint_is_not_exposed():
     assert response.status_code in (404, 405)
 
 
-def test_cors_preflight_allows_local_frontend():
-    response = client.options(
-        "/auth/google/start",
+def test_cors_preflight_is_not_enabled_by_default():
+    local_app = FastAPI()
+    configure_cors(local_app, [])
+
+    @local_app.post("/example")
+    def _example():
+        return {"ok": True}
+
+    local_client = TestClient(local_app)
+    response = local_client.options(
+        "/example",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code == 405
+    assert response.headers.get("access-control-allow-origin") is None
+
+
+def test_configure_cors_enables_preflight_when_origins_are_set():
+    local_app = FastAPI()
+    configure_cors(local_app, ["http://localhost:3000"])
+
+    @local_app.post("/example")
+    def _example():
+        return {"ok": True}
+
+    local_client = TestClient(local_app)
+    response = local_client.options(
+        "/example",
         headers={
             "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "POST",

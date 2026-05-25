@@ -1,6 +1,6 @@
-﻿# Gmail Agent Assistant
+# Gmail Agent Assistant
 
-Personal, Gmail-only assistant with Telegram-first operations for inbox triage, digesting, and draft suggestion under strict manual-send control.
+Backend-only, Telegram-operated Gmail assistant for inbox triage, digesting, and draft suggestion under strict manual-send control.
 
 ## Explicit Safety Guarantee
 This system never sends emails automatically.
@@ -9,54 +9,47 @@ This system never sends emails automatically.
 - No `send_email` tool exists in backend services.
 - Drafts can be generated and created in Gmail, but final send happens manually by the user in Gmail.
 
-## Project Overview
-The app is Telegram-first: users control sync, digesting, and approvals from Telegram commands and inline buttons. It syncs Gmail metadata/body into Postgres, runs structured AI analysis, tracks suggested actions in an audit log, and keeps email sending manual (draft-only automation).
-
-## Architecture (Text Diagram)
+## Architecture (Telegram-First)
 
 ```text
-[Next.js Frontend]
+[Telegram User]
    |
-   | HTTP (REST)
+   | Bot commands + inline callbacks
    v
-[FastAPI Backend]
-   |-- /auth/*           -> Google OAuth flow
-   |-- /emails/*         -> Gmail sync + stored email retrieval + analysis
-   |-- /digests/*        -> digest generation + Telegram dispatch
-   |-- /actions/*        -> approve/reject/execute suggested agent actions
-   |-- /drafts/*         -> draft generation + create Gmail draft (no send)
-   |-- /rules/*          -> user rule management
-   |-- /telegram/*       -> webhook command handling + secure chat link + test endpoint
-   |
-   +--> [SQLAlchemy Models + Alembic Migrations] -> [Postgres]
-   +--> [Celery Worker + Beat] <-> [Redis]
-   +--> [OpenAI API (structured outputs)]
-   +--> [Gmail API (read + draft only)]
-   +--> [Telegram Bot API]
+[Telegram Bot API] -> [FastAPI Backend /telegram/webhook]
+                        |-- /auth/*      -> Google OAuth flow
+                        |-- /emails/*    -> Gmail sync + stored email retrieval + analysis
+                        |-- /digests/*   -> digest generation + Telegram dispatch
+                        |-- /actions/*   -> approve/reject/execute suggested actions
+                        |-- /drafts/*    -> draft generation + create Gmail draft (no send)
+                        |-- /rules/*     -> user rule management
+                        |-- /telegram/*  -> webhook + link token + link confirmation + test endpoint
+                        |
+                        +--> [SQLAlchemy + Alembic] -> [Postgres]
+                        +--> [Celery Worker + Beat] <-> [Redis]
+                        +--> [OpenAI API (structured outputs)]
+                        +--> [Gmail API (read + draft only)]
 ```
 
 ## Tech Stack
-- Frontend: Next.js + TypeScript + Tailwind CSS
 - Backend: Python + FastAPI
 - Database: Postgres
 - ORM/Migrations: SQLAlchemy + Alembic
 - Background Jobs: Redis + Celery
 - AI: OpenAI API (structured JSON outputs)
-- Email: Gmail API
-- Notifications/Control: Telegram Bot API
+- Email: Gmail API (read + draft only)
+- Operations: Telegram Bot API
 
-## Setup Instructions
+## Setup
 1. Copy env template:
    - `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`)
 2. Fill required values in `.env`:
    - Google OAuth credentials
    - OpenAI API key
    - Telegram bot token (+ optional bot username)
-   - Telegram webhook base URL + secret token for webhook validation
+   - Telegram webhook base URL + secret token
    - Database URL
-3. Install frontend dependencies:
-   - `cd frontend && npm install`
-4. Install backend dependencies:
+3. Install backend dependencies:
    - `cd backend && pip install -r requirements.txt`
 
 ## Run
@@ -64,28 +57,35 @@ The app is Telegram-first: users control sync, digesting, and approvals from Tel
 Docker Compose:
 - `docker compose up --build`
 
-Local split:
-- Frontend: `cd frontend && npm run dev`
+Local services:
 - Backend API: `cd backend && uvicorn app.main:app --reload`
 - Celery worker: `cd backend && celery -A app.workers.tasks worker --loglevel=info`
 - Celery beat: `cd backend && celery -A app.workers.tasks beat --loglevel=info`
 - Migrations: `cd backend && alembic upgrade head`
 
-## Current Scope
-- Gmail read + draft creation integration (no auto-send)
-- Google OAuth start/callback with encrypted token storage
-- Telegram webhook command handling (`/start`, `/help`, `/sync`, `/digest`, `/pending`, `/rules`, `/rule add`, `/rule del`)
-- Inline Telegram approve/reject callbacks for pending actions
-- Hourly Telegram automation via Celery beat with scheduled idempotency
-- Rule-aware AI analysis and draft generation
+## Telegram-First Setup/Test Flow
+1. Connect Gmail account (one-time OAuth):
+   - `POST /auth/google/start` to get `auth_url`
+   - Open `auth_url` in a browser and complete consent
+   - Google calls back to `GET /auth/google/callback`
+2. Create Telegram link token:
+   - `POST /telegram/link/start` with `user_id`
+3. Link chat in Telegram:
+   - Send `/start <token>` to your bot
+4. Operate only through Telegram:
+   - `/sync`
+   - `/digest`
+   - `/pending`
+   - `/rules`
+   - `/rule add <text>`
+   - `/rule del <rule-id>`
 
-## Telegram Webhook Setup
-- Set `TELEGRAM_WEBHOOK_BASE_URL` to your public HTTPS backend base URL (example: `https://agent.example.com`).
-- Set `TELEGRAM_WEBHOOK_SECRET_TOKEN` to a strong random secret.
-- On backend startup, the app auto-registers Telegram webhook URL as:
+## Telegram Webhook
+- Set `TELEGRAM_WEBHOOK_BASE_URL` to your public HTTPS backend URL.
+- Backend startup auto-registers webhook at:
   - `<TELEGRAM_WEBHOOK_BASE_URL>/telegram/webhook`
-- Telegram delivers webhook updates only to public HTTPS endpoints. Localhost is not reachable by Telegram unless exposed via a secure tunnel/reverse proxy.
-- Verify webhook status with Telegram API:
+- Localhost is not reachable by Telegram unless exposed via secure tunnel/reverse proxy.
+- Verify webhook status:
 
 ```bash
 curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"

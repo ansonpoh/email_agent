@@ -31,13 +31,21 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Gmail Agent Assistant", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def configure_cors(app_instance: FastAPI, origins: list[str]) -> None:
+    if not origins:
+        logger.info("cors_middleware_disabled reason=no_origins_configured")
+        return
+
+    app_instance.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+configure_cors(app, settings.cors_origins)
 
 
 @app.middleware("http")
