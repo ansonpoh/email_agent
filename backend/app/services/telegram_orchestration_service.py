@@ -68,7 +68,15 @@ class TelegramOrchestrationService:
         self._maybe_send_urgent_alert(db=db, user=user, email_row=email_row, analysis=analysis, action_row=action_row)
         return analysis, action_row
 
-    def generate_and_send_digest(self, db: Session, user: User, run_key: str | None = None, job_type: str = "manual_digest") -> dict:
+    def generate_and_send_digest(
+        self,
+        db: Session,
+        user: User,
+        run_key: str | None = None,
+        job_type: str = "manual_digest",
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+    ) -> dict:
         if not user.telegram_chat_id:
             return {"sent": False, "reason": "telegram_not_linked"}
 
@@ -76,7 +84,12 @@ class TelegramOrchestrationService:
             if not self._reserve_scheduled_run(db=db, user=user, job_type=job_type, run_key=run_key):
                 return {"sent": False, "skipped_duplicate": True}
 
-        result = self.pipeline_service.generate_digest_for_user(db=db, user=user)
+        result = self.pipeline_service.generate_digest_for_user(
+            db=db,
+            user=user,
+            period_start=period_start,
+            period_end=period_end,
+        )
         digest = result["digest"]
         sent_payload = self.telegram_service.send_message(chat_id=user.telegram_chat_id, text=result["output"].digest_text)
         if not sent_payload:

@@ -76,6 +76,11 @@ Notes:
    - `/status`
    - `/sync`
    - `/digest`
+   - `/digest_schedule set HH:MM[,HH:MM[,HH:MM]]`
+   - `/digest_schedule status`
+   - `/digest_schedule on`
+   - `/digest_schedule off`
+   - `/timezone set <IANA timezone>`
    - `/pending`
    - `/rules`
    - `/rule add <text>`

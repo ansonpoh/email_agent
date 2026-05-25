@@ -18,7 +18,7 @@ celery_app.conf.update(
     beat_schedule={
         "hourly-telegram-cycle": {
             "task": "app.workers.tasks.run_hourly_telegram_cycle",
-            "schedule": crontab(minute=0),
+            "schedule": crontab(minute="*"),
         }
     },
 )

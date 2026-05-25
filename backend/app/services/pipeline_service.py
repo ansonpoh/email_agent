@@ -44,25 +44,33 @@ class PipelineService:
             "created_email_ids": created_email_ids,
         }
 
-    def generate_digest_for_user(self, db: Session, user: User) -> dict:
-        period_end = datetime.utcnow()
-        period_start = user.last_checked_at or (period_end - timedelta(days=1))
-        window_start = period_end - timedelta(minutes=settings.digest_idempotency_window_minutes)
+    def generate_digest_for_user(
+        self,
+        db: Session,
+        user: User,
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+    ) -> dict:
+        period_end_value = period_end or datetime.utcnow()
+        period_start_value = period_start or user.last_checked_at or (period_end_value - timedelta(days=1))
+        window_start = period_end_value - timedelta(minutes=settings.digest_idempotency_window_minutes)
 
-        existing = (
+        existing_query = (
             db.query(Digest)
             .filter(Digest.user_id == user.id)
-            .filter(Digest.period_start == period_start)
-            .filter(Digest.created_at >= window_start)
-            .order_by(Digest.created_at.desc())
-            .first()
+            .filter(Digest.period_start == period_start_value)
+            .filter(Digest.period_end == period_end_value)
         )
+        if period_start is None or period_end is None:
+            existing_query = existing_query.filter(Digest.created_at >= window_start)
+        existing = existing_query.order_by(Digest.created_at.desc()).first()
 
         rows = (
             db.query(Email, EmailAnalysis)
             .outerjoin(EmailAnalysis, Email.id == EmailAnalysis.email_id)
             .filter(Email.user_id == user.id)
-            .filter(Email.received_at >= period_start)
+            .filter(Email.received_at >= period_start_value)
+            .filter(Email.received_at < period_end_value)
             .order_by(Email.received_at.desc())
             .all()
         )
@@ -87,8 +95,8 @@ class PipelineService:
 
         record = Digest(
             user_id=user.id,
-            period_start=period_start,
-            period_end=period_end,
+            period_start=period_start_value,
+            period_end=period_end_value,
             digest_text=output.digest_text,
             sent_to_telegram=False,
         )

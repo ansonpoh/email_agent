@@ -100,6 +100,25 @@ class GmailService:
 
         return incoming
 
+    def fetch_latest_primary_inbox(self, user: User, db: Session, limit: int = 10) -> list[dict]:
+        response = self._gmail_request(
+            user=user,
+            db=db,
+            method="GET",
+            url="https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={
+                "q": "in:inbox category:primary",
+                "maxResults": max(1, min(limit, 50)),
+            },
+        )
+        payload = response.json()
+        messages = payload.get("messages", [])
+        incoming: list[dict] = []
+        for message in messages:
+            parsed = self._get_message_detail(user=user, message_id=message["id"], db=db)
+            incoming.append(parsed)
+        return incoming
+
     def create_gmail_draft(self, user: User, db: Session, draft_body: str, subject: str) -> str:
         message = (
             f"Subject: {subject}\r\n"

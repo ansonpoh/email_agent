@@ -58,6 +58,8 @@ class DigestService:
         lines.append(f"Needs reply: {len(needs_reply)}")
         lines.append(f"Deadlines/tasks: {len(deadlines)}")
         lines.append(f"Low priority: {len(low_priority)}")
+        if not (priority_emails or needs_reply or deadlines or low_priority):
+            lines.append("No new emails in this period.")
         lines.append("")
         lines.append("Suggested next steps:")
         lines.extend(f"- {step}" for step in steps)

@@ -122,6 +122,12 @@ def test_digest_service_builds_text():
     assert len(output.deadlines) == 1
 
 
+def test_digest_service_empty_window_message():
+    service = DigestService()
+    output = service.build_digest([])
+    assert "No new emails in this period." in output.digest_text
+
+
 def test_draft_service_structured_output(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(settings, "openai_max_retries", 1)
