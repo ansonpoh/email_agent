@@ -22,7 +22,6 @@ This system never sends emails automatically.
                         |-- /digests/*   -> digest generation + Telegram dispatch
                         |-- /actions/*   -> approve/reject/execute suggested actions
                         |-- /drafts/*    -> draft generation + create Gmail draft (no send)
-                        |-- /rules/*     -> user rule management
                         |-- /telegram/*  -> webhook + Telegram test endpoint
                         |
                         +--> [SQLAlchemy + Alembic] -> [Postgres]
@@ -76,18 +75,13 @@ Notes:
    - `/status`
    - `/sync`
    - `/today`
-   - `/digest`
    - `/digest_schedule country <country>`
    - `/digest_schedule count <1-3>`
    - `/digest_schedule times <8am,1pm[,6pm]>`
    - `/digest_schedule status`
    - `/digest_schedule on`
    - `/digest_schedule off`
-   - `/timezone set <IANA timezone>`
    - `/pending`
-   - `/rules`
-   - `/rule add <text>`
-   - `/rule del <rule-id>`
 
 ## Telegram Webhook
 - Set `TELEGRAM_WEBHOOK_BASE_URL` to your public HTTPS backend URL.
@@ -116,9 +110,6 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 - `POST /actions/{action_id}/reject`
 - `POST /drafts/generate`
 - `POST /drafts/{draft_id}/create-in-gmail`
-- `GET /rules`
-- `POST /rules`
-- `DELETE /rules/{rule_id}`
 - `POST /telegram/webhook`
 - `POST /telegram/test`
 

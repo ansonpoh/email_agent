@@ -11,7 +11,6 @@ from app.models.email import Email
 from app.models.email_analysis import EmailAnalysis
 from app.models.scheduled_run import ScheduledRun
 from app.models.user import User
-from app.models.user_rule import UserRule
 from app.services.action_execution_service import ActionExecutionService
 from app.services.agent_service import AgentService
 from app.services.pipeline_service import PipelineService
@@ -35,7 +34,6 @@ class TelegramOrchestrationService:
         sync_result = self.pipeline_service.sync_user_emails(db=db, user=user)
         email_ids = sync_result.get("created_email_ids", [])
         emails = db.query(Email).filter(Email.id.in_(email_ids)).order_by(Email.received_at.desc()).all() if email_ids else []
-        rules = self._active_rules(db=db, user_id=user.id)
 
         analysed = 0
         urgent_alerts = 0
@@ -44,7 +42,7 @@ class TelegramOrchestrationService:
                 db=db,
                 user=user,
                 email_row=email_row,
-                rules=rules,
+                user_rules=[],
             )
             analysed += 1
             if self._maybe_send_urgent_alert(db=db, user=user, email_row=email_row, analysis=analysis, action_row=action_row):
@@ -59,12 +57,11 @@ class TelegramOrchestrationService:
         }
 
     def analyze_existing_email(self, db: Session, user: User, email_row: Email) -> tuple[EmailAnalysis, AgentAction | None]:
-        rules = self._active_rules(db=db, user_id=user.id)
         analysis, action_row = self._create_or_update_analysis_action(
             db=db,
             user=user,
             email_row=email_row,
-            rules=rules,
+            user_rules=[],
         )
         self._maybe_send_urgent_alert(db=db, user=user, email_row=email_row, analysis=analysis, action_row=action_row)
         return analysis, action_row
@@ -229,12 +226,12 @@ class TelegramOrchestrationService:
         db: Session,
         user: User,
         email_row: Email,
-        rules: list[str],
+        user_rules: list[str],
     ) -> tuple[EmailAnalysis, AgentAction | None]:
         analysis_output = self.agent_service.analyse_email(
             subject=email_row.subject,
             body_text=email_row.body_text,
-            user_rules=rules,
+            user_rules=user_rules,
         )
 
         analysis = db.query(EmailAnalysis).filter(EmailAnalysis.email_id == email_row.id).first()
@@ -323,14 +320,3 @@ class TelegramOrchestrationService:
             db.add(action_row)
         db.commit()
         return True
-
-    @staticmethod
-    def _active_rules(db: Session, user_id: UUID) -> list[str]:
-        rows = (
-            db.query(UserRule.rule_text)
-            .filter(UserRule.user_id == user_id)
-            .filter(UserRule.is_active.is_(True))
-            .order_by(UserRule.created_at.desc())
-            .all()
-        )
-        return [row[0] for row in rows]

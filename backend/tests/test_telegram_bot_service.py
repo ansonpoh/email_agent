@@ -171,6 +171,9 @@ def test_help_lists_latest_command():
     assert result["message"] == "help"
     assert "/latest - show 10 latest primary inbox emails" in telegram.messages[-1]["text"]
     assert "/today - summarize today's primary inbox emails with AI" in telegram.messages[-1]["text"]
+    assert "/digest - send latest digest" not in telegram.messages[-1]["text"]
+    assert "/timezone set <IANA>" not in telegram.messages[-1]["text"]
+    assert "/rules - list active rules" not in telegram.messages[-1]["text"]
 
 
 def test_latest_returns_compact_lines():
@@ -443,12 +446,36 @@ def test_digest_schedule_status_displays_toggle_timezone_count_and_times():
     assert "Times: 09:00, 14:00" in text
 
 
-def test_timezone_set_updates_user():
-    user = _linked_user("1011")
+def test_removed_digest_command_returns_unknown():
+    user = _linked_user("1017")
     db = _FakeDb(users=[user])
     telegram = _FakeTelegramService()
     service = _build_service(telegram)
 
-    result = service.handle_update(db=db, update={"message": {"text": "/timezone set Asia/Singapore", "chat": {"id": "1011"}}})
-    assert result["message"] == "timezone_set"
-    assert user.timezone == "Asia/Singapore"
+    result = service.handle_update(db=db, update={"message": {"text": "/digest", "chat": {"id": "1017"}}})
+    assert result["message"] == "unknown_command"
+    assert telegram.messages[-1]["text"] == "Unknown command. Send /help."
+
+
+def test_removed_timezone_command_returns_unknown():
+    user = _linked_user("1018")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/timezone set Asia/Singapore", "chat": {"id": "1018"}}})
+    assert result["message"] == "unknown_command"
+    assert telegram.messages[-1]["text"] == "Unknown command. Send /help."
+
+
+def test_removed_rules_commands_return_unknown():
+    user = _linked_user("1019")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    commands = ["/rules", "/rule add Be concise", f"/rule del {uuid4()}"]
+    for command in commands:
+        result = service.handle_update(db=db, update={"message": {"text": command, "chat": {"id": "1019"}}})
+        assert result["message"] == "unknown_command"
+        assert telegram.messages[-1]["text"] == "Unknown command. Send /help."

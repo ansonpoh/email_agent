@@ -1,13 +1,11 @@
 from datetime import datetime, timezone
 import re
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
 from app.models.agent_action import AgentAction
 from app.models.user import User
-from app.models.user_rule import UserRule
 from app.services.country_timezone_service import resolve_country_timezone
 from app.services.gmail_service import GmailService
 from app.services.telegram_auth_state_service import TelegramAuthStateService
@@ -85,13 +83,8 @@ class TelegramBotService:
                     "/latest - show 10 latest primary inbox emails\n"
                     "/today - summarize today's primary inbox emails with AI\n"
                     "/sync - sync inbox and analyze new messages\n"
-                    "/digest - send latest digest\n"
                     "/digest_schedule status|country|count|times|on|off - manage scheduled digests\n"
-                    "/timezone set <IANA> - set timezone for schedule windows\n"
                     "/pending - list pending approvals\n"
-                    "/rules - list active rules\n"
-                    "/rule add <text> - add a rule\n"
-                    "/rule del <rule-id> - delete a rule"
                 ),
             )
             return {"ok": True, "message": "help"}
@@ -102,33 +95,6 @@ class TelegramBotService:
                 text=f"Linked account: {user.email}",
             )
             return {"ok": True, "message": "status", "user_id": str(user.id)}
-
-        if text.startswith("/timezone"):
-            if text == "/timezone":
-                self.telegram_service.send_message(chat_id=chat_id, text=f"Current timezone: {user.timezone}")
-                return {"ok": True, "message": "timezone_status"}
-            if text.startswith("/timezone set "):
-                timezone_name = text.removeprefix("/timezone set ").strip()
-                if not timezone_name:
-                    self.telegram_service.send_message(chat_id=chat_id, text="Usage: /timezone set <IANA timezone>")
-                    return {"ok": True, "message": "timezone_invalid"}
-                try:
-                    ZoneInfo(timezone_name)
-                except ZoneInfoNotFoundError:
-                    self.telegram_service.send_message(
-                        chat_id=chat_id,
-                        text="Invalid timezone. Example: /timezone set Asia/Singapore",
-                    )
-                    return {"ok": True, "message": "timezone_invalid"}
-
-                user.timezone = timezone_name
-                db.add(user)
-                db.commit()
-                self.telegram_service.send_message(chat_id=chat_id, text=f"Timezone updated to {timezone_name}.")
-                return {"ok": True, "message": "timezone_set", "timezone": timezone_name}
-
-            self.telegram_service.send_message(chat_id=chat_id, text="Usage: /timezone set <IANA timezone>")
-            return {"ok": True, "message": "timezone_invalid"}
 
         if text.startswith("/digest_schedule"):
             if text == "/digest_schedule":
@@ -331,63 +297,11 @@ class TelegramBotService:
             )
             return {"ok": True, "message": "sync", "result": result}
 
-        if text == "/digest":
-            result = self.orchestration_service.generate_and_send_digest(db=db, user=user)
-            if result.get("sent"):
-                self.telegram_service.send_message(chat_id=chat_id, text="Digest delivered.")
-            else:
-                self.telegram_service.send_message(chat_id=chat_id, text=f"Digest not sent: {result}")
-            return {"ok": True, "message": "digest", "result": result}
-
         if text == "/pending":
             result = self.orchestration_service.send_pending_actions(db=db, user=user)
             if result.get("pending", 0) == 0:
                 self.telegram_service.send_message(chat_id=chat_id, text="No pending actions.")
             return {"ok": True, "message": "pending", "result": result}
-
-        if text == "/rules":
-            rows = (
-                db.query(UserRule)
-                .filter(UserRule.user_id == user.id)
-                .filter(UserRule.is_active.is_(True))
-                .order_by(UserRule.created_at.desc())
-                .all()
-            )
-            if not rows:
-                self.telegram_service.send_message(chat_id=chat_id, text="No active rules.")
-            else:
-                lines = [f"{rule.id}: {rule.rule_text}" for rule in rows[:20]]
-                self.telegram_service.send_message(chat_id=chat_id, text="Active rules:\n" + "\n".join(lines))
-            return {"ok": True, "message": "rules_list"}
-
-        if text.startswith("/rule add "):
-            rule_text = text.removeprefix("/rule add ").strip()
-            if not rule_text:
-                self.telegram_service.send_message(chat_id=chat_id, text="Usage: /rule add <text>")
-                return {"ok": True, "message": "rule_add_invalid"}
-            row = UserRule(user_id=user.id, rule_text=rule_text, is_active=True)
-            db.add(row)
-            db.commit()
-            db.refresh(row)
-            self.telegram_service.send_message(chat_id=chat_id, text=f"Rule added: {row.id}")
-            return {"ok": True, "message": "rule_added", "rule_id": str(row.id)}
-
-        if text.startswith("/rule del "):
-            raw_id = text.removeprefix("/rule del ").strip()
-            try:
-                rule_id = UUID(raw_id)
-            except ValueError:
-                self.telegram_service.send_message(chat_id=chat_id, text="Invalid rule id.")
-                return {"ok": True, "message": "rule_delete_invalid_id"}
-
-            row = db.query(UserRule).filter(UserRule.id == rule_id, UserRule.user_id == user.id).first()
-            if not row:
-                self.telegram_service.send_message(chat_id=chat_id, text="Rule not found.")
-                return {"ok": True, "message": "rule_not_found"}
-            db.delete(row)
-            db.commit()
-            self.telegram_service.send_message(chat_id=chat_id, text="Rule deleted.")
-            return {"ok": True, "message": "rule_deleted"}
 
         self.telegram_service.send_message(chat_id=chat_id, text="Unknown command. Send /help.")
         return {"ok": True, "message": "unknown_command"}

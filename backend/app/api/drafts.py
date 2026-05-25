@@ -10,7 +10,6 @@ from app.deps import draft_service
 from app.models.draft_reply import DraftReply
 from app.models.email import Email
 from app.models.user import User
-from app.models.user_rule import UserRule
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -26,20 +25,11 @@ def generate_draft(payload: DraftGenerateRequest, db: Session = Depends(get_db))
     if not email_row:
         raise HTTPException(status_code=404, detail="Email not found")
 
-    rules = (
-        db.query(UserRule.rule_text)
-        .filter(UserRule.user_id == email_row.user_id)
-        .filter(UserRule.is_active.is_(True))
-        .order_by(UserRule.created_at.desc())
-        .all()
-    )
-    rule_texts = [row[0] for row in rules]
-
     output = draft_service.generate_draft(
         subject=email_row.subject,
         body_text=email_row.body_text,
         tone=payload.tone,
-        user_rules=rule_texts,
+        user_rules=[],
     )
 
     draft = DraftReply(

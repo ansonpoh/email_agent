@@ -36,4 +36,3 @@ class User(Base):
 
     emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
     digests = relationship("Digest", back_populates="user", cascade="all, delete-orphan")
-    rules = relationship("UserRule", back_populates="user", cascade="all, delete-orphan")

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
-from app.api import actions, auth, digests, drafts, emails, rules, telegram
+from app.api import actions, auth, digests, drafts, emails, telegram
 from app.db.migrations import run_db_migrations
 from app.deps import telegram_service
 
@@ -124,4 +124,3 @@ app.include_router(digests.router)
 app.include_router(actions.router)
 app.include_router(drafts.router)
 app.include_router(telegram.router)
-app.include_router(rules.router)

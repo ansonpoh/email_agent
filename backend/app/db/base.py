@@ -6,7 +6,6 @@ from app.models.email import Email
 from app.models.email_analysis import EmailAnalysis
 from app.models.scheduled_run import ScheduledRun
 from app.models.user import User
-from app.models.user_rule import UserRule
 
 __all__ = [
     "Base",
@@ -16,6 +15,5 @@ __all__ = [
     "AgentAction",
     "DraftReply",
     "Digest",
-    "UserRule",
     "ScheduledRun",
 ]

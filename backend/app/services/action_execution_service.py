@@ -6,7 +6,6 @@ from app.models.agent_action import AgentAction
 from app.models.draft_reply import DraftReply
 from app.models.email import Email
 from app.models.user import User
-from app.models.user_rule import UserRule
 from app.services.draft_service import DraftService
 
 
@@ -57,21 +56,13 @@ class ActionExecutionService:
         if not user:
             raise HTTPException(status_code=404, detail="Related user not found")
 
-        rules = (
-            db.query(UserRule.rule_text)
-            .filter(UserRule.user_id == user.id)
-            .filter(UserRule.is_active.is_(True))
-            .order_by(UserRule.created_at.desc())
-            .all()
-        )
-        rule_texts = [row[0] for row in rules]
         tone = str(action.suggested_payload.get("tone") or "professional")
 
         output = self.draft_service.generate_draft(
             subject=email_row.subject,
             body_text=email_row.body_text,
             tone=tone,
-            user_rules=rule_texts,
+            user_rules=[],
         )
 
         draft = DraftReply(
