@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import settings
 from app.db.session import SessionLocal
-from app.deps import telegram_orchestration_service
+from app.deps import direct_email_watcher_service, telegram_orchestration_service
 from app.models.user import User
 from app.workers.celery_app import celery_app
 
@@ -156,6 +156,11 @@ def run_hourly_telegram_cycle() -> dict:
     return run_telegram_cycle()
 
 
+@celery_app.task(name="app.workers.tasks.run_direct_email_watcher_cycle")
+def run_direct_email_watcher_cycle_task() -> dict:
+    return run_direct_email_watcher_cycle()
+
+
 def run_telegram_cycle(*, now_utc: datetime | None = None, grace_minutes: int | None = None) -> dict:
     if not settings.telegram_scheduler_enabled:
         return {"status": "skipped", "reason": "scheduler_disabled"}
@@ -213,5 +218,19 @@ def run_telegram_cycle(*, now_utc: datetime | None = None, grace_minutes: int | 
             "sent_digests": sent_digests,
             "failed": failed,
         }
+    finally:
+        db.close()
+
+
+def run_direct_email_watcher_cycle(*, now_utc: datetime | None = None) -> dict:
+    if not settings.direct_email_watcher_enabled:
+        return {"status": "skipped", "reason": "direct_email_watcher_disabled"}
+
+    db = SessionLocal()
+    try:
+        return direct_email_watcher_service.run_cycle(db=db, now_utc=now_utc)
+    except Exception as exc:
+        logger.exception("run_direct_email_watcher_cycle_failed error=%s", exc)
+        return {"status": "failed", "error": str(exc)}
     finally:
         db.close()

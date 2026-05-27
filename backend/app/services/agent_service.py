@@ -7,6 +7,7 @@ from openai import APIError, APITimeoutError, RateLimitError
 
 from app.config import settings
 from app.schemas.digest_schema import AIDigestSummaryOutput
+from app.schemas.direct_email_schema import DirectEmailClassificationOutput, DirectEmailDraftOutput
 from app.schemas.email_schema import EmailAnalysisOutput, TodaySummaryOutput
 
 
@@ -102,6 +103,81 @@ class AgentService:
         raise HTTPException(
             status_code=502,
             detail=f"OpenAI digest summary failed after retries: {last_error}",
+        )
+
+    def classify_direct_email(self, email_content: str) -> DirectEmailClassificationOutput:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.1,
+                    messages=self._direct_classifier_messages(email_content=email_content),
+                    response_format=DirectEmailClassificationOutput,
+                )
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed direct email classification was empty.")
+                return parsed
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning(
+                    "OpenAI classify_direct_email attempt %s/%s failed: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI direct-email classification failed after retries: {last_error}",
+        )
+
+    def generate_direct_email_reply(
+        self,
+        *,
+        email_content: str,
+        classification: DirectEmailClassificationOutput,
+    ) -> str:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.2,
+                    messages=self._direct_reply_messages(
+                        email_content=email_content,
+                        classification_json=classification.model_dump_json(),
+                    ),
+                    response_format=DirectEmailDraftOutput,
+                )
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed direct-email reply was empty.")
+                body = parsed.draft_reply_body.strip()
+                if not body:
+                    raise ValueError("OpenAI generated an empty direct-email draft body.")
+                return body
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning(
+                    "OpenAI generate_direct_email_reply attempt %s/%s failed: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI direct-email reply generation failed after retries: {last_error}",
         )
 
     def _client_instance(self) -> OpenAI:
@@ -219,6 +295,58 @@ class AgentService:
                     f"Emails in digest window: {len(emails)}\n\n"
                     "Email facts:\n"
                     + ("\n".join(items) if items else "(none)")
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _direct_classifier_messages(email_content: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are an email triage assistant.\n\n"
+                    "Analyze the email and determine whether it is a direct human email that likely requires "
+                    "the user's attention.\n\n"
+                    "Return only valid JSON.\n\n"
+                    "Fields:\n"
+                    "- is_direct_email: boolean\n"
+                    "- needs_reply: boolean\n"
+                    "- urgency: \"low\" | \"medium\" | \"high\"\n"
+                    "- category: string\n"
+                    "- summary: string\n"
+                    "- reason: string\n"
+                    "- suggested_action: string\n"
+                    "- reply_intent: string\n\n"
+                    "Exclude newsletters, no-reply emails, system notifications, job alerts, promotions, "
+                    "receipts, OTPs, and automated messages."
+                ),
+            },
+            {"role": "user", "content": f"Email:\n{email_content}"},
+        ]
+
+    @staticmethod
+    def _direct_reply_messages(email_content: str, classification_json: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are an email reply assistant.\n\n"
+                    "Write a concise draft reply to the email below.\n\n"
+                    "Rules:\n"
+                    "- Do not invent facts.\n"
+                    "- Do not make commitments unless explicitly supported by the email or user context.\n"
+                    "- Use placeholders where the user needs to fill in information.\n"
+                    "- Keep the tone professional and natural.\n"
+                    "- Do not include a subject line unless needed.\n"
+                    "- Return only the draft reply body."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Original email:\n{email_content}\n\n"
+                    f"Classification:\n{classification_json}"
                 ),
             },
         ]

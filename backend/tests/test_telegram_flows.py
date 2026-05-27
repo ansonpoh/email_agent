@@ -106,6 +106,8 @@ def test_startup_lifecycle_starts_and_stops_inproc_scheduler(monkeypatch):
     monkeypatch.setattr(settings, "run_db_migrations_on_startup", False)
     monkeypatch.setattr(settings, "inproc_scheduler_enabled", True)
     monkeypatch.setattr(settings, "inproc_scheduler_tick_seconds", 60)
+    monkeypatch.setattr(settings, "direct_email_watcher_enabled", True)
+    monkeypatch.setattr(settings, "direct_email_watch_interval_minutes", 10)
     monkeypatch.setattr(app_main, "AsyncIOScheduler", _FakeScheduler)
     monkeypatch.setattr(app_main.telegram_service, "register_webhook_from_settings", lambda: True)
 
@@ -116,10 +118,12 @@ def test_startup_lifecycle_starts_and_stops_inproc_scheduler(monkeypatch):
     assert captured["stopped"] is True
     assert captured["wait"] is False
     assert captured["timezone"] == "UTC"
-    assert len(captured["jobs"]) == 1
+    assert len(captured["jobs"]) == 2
     assert captured["jobs"][0]["trigger"] == "interval"
     assert captured["jobs"][0]["seconds"] == 60
     assert captured["jobs"][0]["id"] == "inproc-telegram-cycle"
+    assert captured["jobs"][1]["id"] == "inproc-direct-email-watcher-cycle"
+    assert captured["jobs"][1]["seconds"] == 600
 
 
 def test_telegram_approval_markup_shape():

@@ -189,3 +189,30 @@ def test_run_cycle_skips_sending_when_digest_generation_fails(monkeypatch):
     assert result["processed_users"] == 1
     assert result["sent_digests"] == 0
     assert result["failed"] == []
+
+
+def test_run_direct_email_watcher_cycle_disabled(monkeypatch):
+    monkeypatch.setattr(tasks.settings, "direct_email_watcher_enabled", False)
+    result = tasks.run_direct_email_watcher_cycle()
+    assert result["status"] == "skipped"
+    assert result["reason"] == "direct_email_watcher_disabled"
+
+
+def test_run_direct_email_watcher_cycle_runs_service(monkeypatch):
+    monkeypatch.setattr(tasks.settings, "direct_email_watcher_enabled", True)
+
+    class _FakeDb:
+        @staticmethod
+        def close():
+            return None
+
+    monkeypatch.setattr(tasks, "SessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(
+        tasks.direct_email_watcher_service,
+        "run_cycle",
+        lambda db, now_utc=None: {"status": "completed", "processed_users": 1, "processed_emails": 2, "created_drafts": 1, "failures": 0},
+    )
+
+    result = tasks.run_direct_email_watcher_cycle()
+    assert result["status"] == "completed"
+    assert result["created_drafts"] == 1

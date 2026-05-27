@@ -1,7 +1,9 @@
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 import logging
+import math
 from typing import Any
 from urllib.parse import urlencode
 
@@ -150,6 +152,39 @@ class GmailService:
         incoming.sort(key=lambda row: row.get("received_at", datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         return incoming[:safe_limit]
 
+    def fetch_direct_email_candidates(
+        self,
+        user: User,
+        db: Session,
+        *,
+        max_results: int = 30,
+        lookback_hours: int = 48,
+    ) -> list[dict]:
+        safe_limit = max(1, min(max_results, 50))
+        safe_lookback_hours = max(1, lookback_hours)
+        lookback_days = max(1, math.ceil(safe_lookback_hours / 24))
+        query = f"in:inbox category:primary newer_than:{lookback_days}d"
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=safe_lookback_hours)
+
+        response = self._gmail_request(
+            user=user,
+            db=db,
+            method="GET",
+            url="https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={"q": query, "maxResults": safe_limit},
+        )
+        payload = response.json()
+        messages = payload.get("messages", [])
+
+        incoming: list[dict] = []
+        for message in messages:
+            parsed = self._get_message_detail(user=user, message_id=message["id"], db=db)
+            if (not parsed.get("is_read")) or parsed.get("received_at", cutoff) >= cutoff:
+                incoming.append(parsed)
+
+        incoming.sort(key=lambda row: row.get("received_at", datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        return incoming[:safe_limit]
+
     def create_gmail_draft(self, user: User, db: Session, draft_body: str, subject: str) -> str:
         message = (
             f"Subject: {subject}\r\n"
@@ -170,6 +205,48 @@ class GmailService:
         if not draft:
             raise HTTPException(status_code=502, detail="Gmail draft API response did not include draft id.")
         return str(draft)
+
+    def create_gmail_reply_draft(self, user: User, db: Session, original_email: dict, draft_body: str) -> str:
+        recipient = str(original_email.get("sender_email") or "").strip()
+        if not recipient:
+            raise HTTPException(status_code=400, detail="Cannot create reply draft without sender email.")
+
+        message = EmailMessage()
+        message["To"] = recipient
+        message["From"] = user.email
+        message["Subject"] = self._ensure_re_subject(original_email.get("subject"))
+
+        in_reply_to = self._clean_single_header(
+            original_email.get("message_id_header") or original_email.get("in_reply_to_header")
+        )
+        references = self._clean_single_header(original_email.get("references_header"))
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+        if references:
+            message["References"] = references
+        elif in_reply_to:
+            message["References"] = in_reply_to
+
+        message.set_content(draft_body or "")
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+        payload: dict[str, Any] = {"raw": encoded_message}
+        thread_id = str(original_email.get("threadId") or "").strip()
+        if thread_id:
+            payload["threadId"] = thread_id
+
+        response = self._gmail_request(
+            user=user,
+            db=db,
+            method="POST",
+            url="https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+            json={"message": payload},
+        )
+        response_payload = response.json()
+        draft_id = response_payload.get("id") or response_payload.get("draft", {}).get("id")
+        if not draft_id:
+            raise HTTPException(status_code=502, detail="Gmail reply draft API response did not include draft id.")
+        return str(draft_id)
 
     def _list_messages(self, user: User, since: datetime | None, db: Session) -> list[dict]:
         params: dict[str, str | int] = {"maxResults": 50}
@@ -215,6 +292,12 @@ class GmailService:
                 date_header=headers.get("date"),
             ),
             "is_read": "UNREAD" not in set(message.get("labelIds", [])),
+            "message_id_header": headers.get("message-id"),
+            "references_header": headers.get("references"),
+            "in_reply_to_header": headers.get("in-reply-to"),
+            "list_unsubscribe_header": headers.get("list-unsubscribe"),
+            "auto_submitted_header": headers.get("auto-submitted"),
+            "precedence_header": headers.get("precedence"),
         }
 
     def _gmail_request(
@@ -241,6 +324,15 @@ class GmailService:
 
         if response.status_code != 401:
             if response.status_code >= 400:
+                lowered = response.text.lower()
+                if "insufficient authentication scopes" in lowered or "insufficient_permissions" in lowered:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            "Gmail API request failed due to insufficient scope. "
+                            "Reconnect Gmail to grant draft permissions (gmail.compose or gmail.modify)."
+                        ),
+                    )
                 raise HTTPException(status_code=400, detail=f"Gmail API request failed: {response.text}")
             return response
 
@@ -390,3 +482,19 @@ class GmailService:
                 pass
 
         return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _ensure_re_subject(subject: str | None) -> str:
+        clean_subject = (subject or "").strip()
+        if not clean_subject:
+            return "Re: (No subject)"
+        if clean_subject.lower().startswith("re:"):
+            return clean_subject
+        return f"Re: {clean_subject}"
+
+    @staticmethod
+    def _clean_single_header(value: str | None) -> str | None:
+        if not value:
+            return None
+        clean = " ".join(str(value).split()).strip()
+        return clean or None

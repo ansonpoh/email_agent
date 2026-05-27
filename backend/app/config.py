@@ -86,6 +86,14 @@ class Settings:
     inproc_scheduler_enabled: bool = _parse_bool(os.getenv("INPROC_SCHEDULER_ENABLED", "true"), True)
     inproc_scheduler_tick_seconds: int = int(os.getenv("INPROC_SCHEDULER_TICK_SECONDS", "60"))
     inproc_scheduler_grace_minutes: int = int(os.getenv("INPROC_SCHEDULER_GRACE_MINUTES", "20"))
+    direct_email_watcher_enabled: bool = _parse_bool(os.getenv("DIRECT_EMAIL_WATCHER_ENABLED", "true"), True)
+    direct_email_watch_interval_minutes: int = int(os.getenv("DIRECT_EMAIL_WATCH_INTERVAL_MINUTES", "10"))
+    direct_email_watch_lookback_hours: int = int(os.getenv("DIRECT_EMAIL_WATCH_LOOKBACK_HOURS", "48"))
+    direct_email_watch_max_messages: int = int(os.getenv("DIRECT_EMAIL_WATCH_MAX_MESSAGES", "30"))
+    direct_email_watch_notify_no_reply: bool = _parse_bool(
+        os.getenv("DIRECT_EMAIL_WATCH_NOTIFY_NO_REPLY", "false"),
+        False,
+    )
 
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "CHANGE_ME_WITH_32_CHAR_MIN_SECRET")
     digest_idempotency_window_minutes: int = int(os.getenv("DIGEST_IDEMPOTENCY_WINDOW_MINUTES", "15"))

@@ -16,7 +16,7 @@ from app.config import settings
 from app.api import actions, auth, digests, drafts, emails, telegram
 from app.db.migrations import run_db_migrations
 from app.deps import telegram_service
-from app.workers.tasks import run_telegram_cycle
+from app.workers.tasks import run_direct_email_watcher_cycle, run_telegram_cycle
 
 logger = logging.getLogger("email_agent")
 logging.basicConfig(
@@ -30,6 +30,13 @@ async def run_inproc_scheduler_cycle() -> None:
         run_telegram_cycle,
         now_utc=datetime.now(timezone.utc),
         grace_minutes=settings.inproc_scheduler_grace_minutes,
+    )
+
+
+async def run_inproc_direct_email_watcher_cycle() -> None:
+    await to_thread(
+        run_direct_email_watcher_cycle,
+        now_utc=datetime.now(timezone.utc),
     )
 
 
@@ -62,11 +69,23 @@ async def lifespan(_app: FastAPI):
                 max_instances=1,
                 coalesce=True,
             )
+            if settings.direct_email_watcher_enabled:
+                watcher_seconds = max(settings.direct_email_watch_interval_minutes * 60, 60)
+                scheduler.add_job(
+                    run_inproc_direct_email_watcher_cycle,
+                    trigger="interval",
+                    seconds=watcher_seconds,
+                    id="inproc-direct-email-watcher-cycle",
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
             scheduler.start()
             logger.info(
-                "inproc_scheduler_started tick_seconds=%s grace_minutes=%s",
+                "inproc_scheduler_started tick_seconds=%s grace_minutes=%s direct_email_watcher_enabled=%s",
                 tick_seconds,
                 settings.inproc_scheduler_grace_minutes,
+                settings.direct_email_watcher_enabled,
             )
         except Exception:
             scheduler = None

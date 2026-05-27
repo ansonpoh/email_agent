@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from app.services.agent_service import AgentService
 from app.services.digest_service import DigestService
 from app.services.draft_service import DraftService
+from app.schemas.direct_email_schema import DirectEmailClassificationOutput, DirectEmailDraftOutput
 
 
 def _fake_completion(parsed):
@@ -254,6 +255,139 @@ def test_agent_service_digest_summary_raises_when_api_key_missing(monkeypatch):
     service = AgentService()
     with pytest.raises(HTTPException):
         service.summarize_digest_window(emails=[{"subject": "Hi"}], user_timezone="UTC")
+
+
+def test_agent_service_classify_direct_email_structured_output(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        return _fake_completion(
+                            DirectEmailClassificationOutput(
+                                is_direct_email=True,
+                                needs_reply=True,
+                                urgency="high",
+                                category="recruiter_follow_up",
+                                summary="Recruiter asked for interview availability.",
+                                reason="Direct question requiring a response.",
+                                suggested_action="Reply with availability placeholders.",
+                                reply_intent="Confirm interest and request scheduling details.",
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.classify_direct_email("Email body")
+    assert result.is_direct_email is True
+    assert result.needs_reply is True
+    assert result.urgency == "high"
+
+
+def test_agent_service_classify_direct_email_retries_on_parse_failure(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+    calls = {"count": 0}
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        calls["count"] += 1
+                        if calls["count"] == 1:
+                            return _fake_completion(None)
+                        return _fake_completion(
+                            DirectEmailClassificationOutput(
+                                is_direct_email=False,
+                                needs_reply=False,
+                                urgency="low",
+                                category="newsletter",
+                                summary="Automated update.",
+                                reason="Bulk sender and no actionable request.",
+                                suggested_action="Archive.",
+                                reply_intent="none",
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.classify_direct_email("Email body")
+    assert result.is_direct_email is False
+    assert calls["count"] == 2
+
+
+def test_agent_service_generate_direct_email_reply_structured_output(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        return _fake_completion(
+                            DirectEmailDraftOutput(
+                                draft_reply_body=(
+                                    "Thanks for reaching out. I am interested and can share availability for "
+                                    "[DATE OPTIONS]. Please let me know your preferred slot."
+                                )
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    classification = DirectEmailClassificationOutput(
+        is_direct_email=True,
+        needs_reply=True,
+        urgency="medium",
+        category="interview",
+        summary="Interview scheduling request.",
+        reason="Direct request for response.",
+        suggested_action="Reply with availability placeholders.",
+        reply_intent="Schedule interview",
+    )
+    result = service.generate_direct_email_reply(email_content="Original email", classification=classification)
+    assert "[DATE OPTIONS]" in result
+
+
+def test_agent_service_generate_direct_email_reply_retries_on_empty_body(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+    calls = {"count": 0}
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        calls["count"] += 1
+                        if calls["count"] == 1:
+                            return _fake_completion(DirectEmailDraftOutput(draft_reply_body=""))
+                        return _fake_completion(DirectEmailDraftOutput(draft_reply_body="Reply with [PLACEHOLDER]."))
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    classification = DirectEmailClassificationOutput(
+        is_direct_email=True,
+        needs_reply=True,
+        urgency="medium",
+        category="interview",
+        summary="Interview scheduling request.",
+        reason="Direct request for response.",
+        suggested_action="Reply with availability placeholders.",
+        reply_intent="Schedule interview",
+    )
+    result = service.generate_direct_email_reply(email_content="Original email", classification=classification)
+    assert result == "Reply with [PLACEHOLDER]."
+    assert calls["count"] == 2
 
 
 def test_digest_service_builds_ai_text():
