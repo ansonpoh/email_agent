@@ -113,7 +113,7 @@ class TelegramOrchestrationService:
         sent_payload = self.telegram_service.send_message(
             chat_id=user.telegram_chat_id,
             text=self._truncate_telegram_text(formatted_digest_message),
-            parse_mode="Markdown",
+            parse_mode=self.telegram_digest_formatter.PARSE_MODE,
         )
         if not sent_payload:
             return {"sent": False, "digest_id": str(digest.id)}
