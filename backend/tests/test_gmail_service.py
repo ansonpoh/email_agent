@@ -71,6 +71,38 @@ def test_fetch_primary_inbox_between_builds_after_before_query(monkeypatch):
     assert f"before:{expected_before}" in captured["params"]["q"]
 
 
+def test_list_messages_uses_primary_inbox_query_without_since(monkeypatch):
+    service = GmailService(token_cipher=TokenCipher("super-secret-key"))
+    captured = {}
+
+    def _fake_request(**kwargs):
+        captured["params"] = kwargs["params"]
+        return _FakeResponse({"messages": []})
+
+    monkeypatch.setattr(service, "_gmail_request", _fake_request)
+
+    rows = service._list_messages(user=object(), since=None, db=object())
+    assert rows == []
+    assert captured["params"]["q"] == "in:inbox category:primary"
+
+
+def test_list_messages_combines_primary_inbox_with_after_when_since_provided(monkeypatch):
+    service = GmailService(token_cipher=TokenCipher("super-secret-key"))
+    captured = {}
+    since = datetime(2026, 5, 25, 0, 0, tzinfo=timezone.utc)
+
+    def _fake_request(**kwargs):
+        captured["params"] = kwargs["params"]
+        return _FakeResponse({"messages": []})
+
+    monkeypatch.setattr(service, "_gmail_request", _fake_request)
+
+    rows = service._list_messages(user=object(), since=since, db=object())
+    assert rows == []
+    expected_after = int(since.timestamp())
+    assert captured["params"]["q"] == f"in:inbox category:primary after:{expected_after}"
+
+
 def test_gmail_service_create_reply_draft_sets_thread_and_headers(monkeypatch):
     service = GmailService(token_cipher=TokenCipher("super-secret-key"))
     captured = {}

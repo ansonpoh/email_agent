@@ -250,8 +250,10 @@ class GmailService:
 
     def _list_messages(self, user: User, since: datetime | None, db: Session) -> list[dict]:
         params: dict[str, str | int] = {"maxResults": 50}
+        query_parts = ["in:inbox", "category:primary"]
         if since:
-            params["q"] = f"after:{int(since.timestamp())}"
+            query_parts.append(f"after:{int(since.timestamp())}")
+        params["q"] = " ".join(query_parts)
 
         response = self._gmail_request(
             user=user,
