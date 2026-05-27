@@ -603,43 +603,100 @@ class TelegramDigestFormatter:
 
     def _normalize_deadline_label(self, value: str, *, reference_year: int) -> str:
         text = self._compact_text(value, max_len=120)
-        # Keep explicit ranges readable (for example, "May 27 00:00 to 23:59")
-        # while still allowing range-start parsing for sorting.
-        if re.search(r"(?i)\b(to|until|through|thru)\b", text):
-            return text
+        range_parts = self._split_deadline_range(text)
+        if range_parts is not None:
+            start_text, end_text = range_parts
+            parsed_start = self._try_parse_deadline(start_text, reference_year=reference_year)
+            if parsed_start is None:
+                return text
+
+            start_dt, start_has_time = parsed_start
+            parsed_end = self._try_parse_deadline(end_text, reference_year=reference_year)
+            if parsed_end is None:
+                parsed_end = self._try_parse_range_end(end_text, start_dt=start_dt)
+
+            start_label = self._format_deadline_label(start_dt, has_time=start_has_time)
+            if parsed_end is None:
+                return start_label
+
+            end_dt, end_has_time = parsed_end
+            if self._is_full_day_same_date_range(
+                start_dt=start_dt,
+                end_dt=end_dt,
+                start_has_time=start_has_time,
+                end_has_time=end_has_time,
+            ):
+                return self._format_deadline_label(start_dt, has_time=False)
+            if start_dt.date() == end_dt.date() and end_has_time:
+                end_label = end_dt.strftime("%I:%M %p").lstrip("0")
+                return f"{start_label} to {end_label}"
+            end_label = self._format_deadline_label(end_dt, has_time=end_has_time)
+            return f"{start_label} to {end_label}"
+
         parsed = self._try_parse_deadline(text, reference_year=reference_year)
         if parsed is None:
             return text
 
         dt, has_time = parsed
-        date_label = f"{dt.strftime('%b')} {dt.day}"
-        if has_time:
-            time_label = dt.strftime("%I:%M %p").lstrip("0")
-            return f"{date_label}, {time_label}"
-        return date_label
+        return self._format_deadline_label(dt, has_time=has_time)
 
     def _try_parse_deadline(self, text: str, *, reference_year: int) -> tuple[datetime, bool] | None:
         if not text:
             return None
 
-        cleaned = re.sub(r"\s+", " ", text).strip()
+        cleaned = self._clean_deadline_text(text)
+        range_parts = self._split_deadline_range(cleaned)
+        if range_parts is not None:
+            start_text, _ = range_parts
+            return self._try_parse_deadline(start_text, reference_year=reference_year)
+
+        parsed = self._try_parse_deadline_single(cleaned, reference_year=reference_year)
+        if parsed is not None:
+            return parsed
+
+        try:
+            iso_candidate = cleaned.replace("Z", "+00:00")
+            parsed_iso = datetime.fromisoformat(iso_candidate)
+            return parsed_iso, True
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _format_deadline_label(value: datetime, *, has_time: bool) -> str:
+        date_label = f"{value.strftime('%b')} {value.day}"
+        if has_time:
+            return f"{date_label}, {value.strftime('%I:%M %p').lstrip('0')}"
+        return date_label
+
+    @staticmethod
+    def _split_deadline_range(value: str) -> tuple[str, str] | None:
+        match = re.match(r"(?is)^(?P<start>.+?)\s+(?:to|until|through|thru)\s+(?P<end>.+)$", value.strip())
+        if not match:
+            return None
+        return match.group("start").strip(" ,.-"), match.group("end").strip(" ,.-")
+
+    @staticmethod
+    def _clean_deadline_text(value: str) -> str:
+        cleaned = re.sub(r"\s+", " ", value).strip()
         cleaned = re.sub(r"\b(am|pm)\b", lambda m: m.group(1).upper(), cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"(?i)\b(by|before|on)\s+", "", cleaned).strip()
+        cleaned = re.sub(r"(?i)\s*\((?:UTC|GMT)?\s*[A-Z0-9:+-]{2,}\)\s*$", "", cleaned).strip()
+        cleaned = re.sub(r"(?i)\s+(?:UTC|GMT)\s*[+-]\d{1,2}(?::?\d{2})?\s*$", "", cleaned).strip()
+        cleaned = re.sub(r"(?i)\s+(?:UTC|GMT)[+-]\d{1,2}(?::?\d{2})?\s*$", "", cleaned).strip()
+        cleaned = re.sub(r"(?<=\d)\s+[A-Z]{3,5}\s*$", "", cleaned).strip()
+        cleaned = re.sub(r"(?:(?<=AM)|(?<=PM))\s+[A-Z]{3,5}\s*$", "", cleaned).strip()
+        return cleaned
 
-        range_match = re.match(r"(?is)^(?P<start>.+?)\s+(?:to|until|through|thru)\s+(?P<end>.+)$", cleaned)
-        if range_match:
-            start_candidate = range_match.group("start").strip(" ,.-")
-            start_parsed = self._try_parse_deadline(start_candidate, reference_year=reference_year)
-            if start_parsed is not None:
-                return start_parsed
-
+    def _try_parse_deadline_single(self, cleaned: str, *, reference_year: int) -> tuple[datetime, bool] | None:
         patterns: list[tuple[str, bool]] = [
             ("%a %d %b - %I:%M %p", True),
             ("%a %d %b %I:%M %p", True),
             ("%d %b - %I:%M %p", True),
             ("%d %b %I:%M %p", True),
+            ("%d %b, %I:%M %p", True),
             ("%d %B - %I:%M %p", True),
             ("%d %B %I:%M %p", True),
+            ("%d %B, %I:%M %p", True),
             ("%d %b %H:%M", True),
             ("%d %B %H:%M", True),
             ("%b %d - %I:%M %p", True),
@@ -668,12 +725,131 @@ class TelegramDigestFormatter:
             except ValueError:
                 continue
 
-        try:
-            iso_candidate = cleaned.replace("Z", "+00:00")
-            parsed_iso = datetime.fromisoformat(iso_candidate)
-            return parsed_iso, True
-        except ValueError:
+        fallback = self._try_parse_deadline_fallback(cleaned, reference_year=reference_year)
+        if fallback is not None:
+            return fallback
+        return None
+
+    def _try_parse_deadline_fallback(self, cleaned: str, *, reference_year: int) -> tuple[datetime, bool] | None:
+        patterns = [
+            re.compile(
+                r"^(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]{3,9})(?:,)?(?:\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>AM|PM))?)?$",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2})(?:,)?(?:\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>AM|PM))?)?$",
+                re.IGNORECASE,
+            ),
+        ]
+
+        for pattern in patterns:
+            match = pattern.match(cleaned)
+            if not match:
+                continue
+            month_value = self._month_number(match.group("month"))
+            if month_value is None:
+                continue
+            try:
+                day_value = int(match.group("day"))
+            except (TypeError, ValueError):
+                continue
+
+            hour_text = match.group("hour")
+            minute_text = match.group("minute")
+            ampm = match.group("ampm")
+            if hour_text is None or minute_text is None:
+                try:
+                    return datetime(reference_year, month_value, day_value), False
+                except ValueError:
+                    continue
+
+            converted_hour = self._converted_hour(hour_text, minute_text, ampm)
+            if converted_hour is None:
+                continue
+            hour_value, minute_value = converted_hour
+            try:
+                return datetime(reference_year, month_value, day_value, hour_value, minute_value), True
+            except ValueError:
+                continue
+        return None
+
+    def _try_parse_range_end(self, end_text: str, *, start_dt: datetime) -> tuple[datetime, bool] | None:
+        cleaned_end = self._clean_deadline_text(end_text).strip(" ,.-")
+        parsed_with_date = self._try_parse_deadline_single(cleaned_end, reference_year=start_dt.year)
+        if parsed_with_date is not None:
+            return parsed_with_date
+
+        time_match = re.match(
+            r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<ampm>AM|PM))?$",
+            cleaned_end,
+            re.IGNORECASE,
+        )
+        if not time_match:
             return None
+
+        converted_hour = self._converted_hour(
+            time_match.group("hour"),
+            time_match.group("minute"),
+            time_match.group("ampm"),
+        )
+        if converted_hour is None:
+            return None
+        hour_value, minute_value = converted_hour
+        return start_dt.replace(hour=hour_value, minute=minute_value, second=0, microsecond=0), True
+
+    @staticmethod
+    def _month_number(token: str) -> int | None:
+        if not token:
+            return None
+        normalized = token.strip()
+        for fmt in ("%b", "%B"):
+            try:
+                return datetime.strptime(normalized, fmt).month
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _converted_hour(hour_text: str, minute_text: str, ampm: str | None) -> tuple[int, int] | None:
+        try:
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except (TypeError, ValueError):
+            return None
+        if minute < 0 or minute > 59:
+            return None
+
+        if ampm:
+            marker = ampm.upper()
+            if hour < 1 or hour > 12:
+                return None
+            if marker == "AM":
+                hour = 0 if hour == 12 else hour
+            elif marker == "PM":
+                hour = 12 if hour == 12 else hour + 12
+            else:
+                return None
+            return hour, minute
+
+        if hour < 0 or hour > 23:
+            return None
+        return hour, minute
+
+    @staticmethod
+    def _is_full_day_same_date_range(
+        *,
+        start_dt: datetime,
+        end_dt: datetime,
+        start_has_time: bool,
+        end_has_time: bool,
+    ) -> bool:
+        if not (start_has_time and end_has_time):
+            return False
+        if start_dt.date() != end_dt.date():
+            return False
+        is_start_of_day = (start_dt.hour, start_dt.minute, start_dt.second) == (0, 0, 0)
+        is_end_of_day = (end_dt.hour, end_dt.minute) == (23, 59)
+        return is_start_of_day and is_end_of_day
 
     @staticmethod
     def _row_dedupe_key(row: dict) -> str:

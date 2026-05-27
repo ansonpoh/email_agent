@@ -293,7 +293,7 @@ def test_collect_descriptive_tasks_sorts_mixed_formats_from_earliest_to_latest()
     )
 
     assert tasks[:5] == [
-        "May 27 00:00 to 23:59 — Review promotional offers if interested; no immediate action required.",
+        "May 27 — Review promotional offers if interested; no immediate action required.",
         "May 28 — Check calendar for availability on May 28 and reply to Anson confirming or proposing an alternative time.",
         "May 31 — Check calendar for availability on May 31 and respond to confirm or propose alternative date.",
         "May 31 — Respond with proposed time and place for lunch on 31 May.",
@@ -312,6 +312,64 @@ def test_try_parse_deadline_supports_day_first_and_range_start():
 
     range_start = formatter._try_parse_deadline("May 27 00:00 to 23:59", reference_year=2026)
     assert range_start == (datetime(2026, 5, 27, 0, 0), True)
+
+
+def test_try_parse_deadline_supports_timezone_suffixes():
+    formatter = TelegramDigestFormatter()
+
+    parsed_sgt = formatter._try_parse_deadline("May 27 00:00 SGT", reference_year=2026)
+    assert parsed_sgt == (datetime(2026, 5, 27, 0, 0), True)
+
+    parsed_utc_offset = formatter._try_parse_deadline("May 27, 2:00 PM UTC+8", reference_year=2026)
+    assert parsed_utc_offset == (datetime(2026, 5, 27, 14, 0), True)
+
+    parsed_range = formatter._try_parse_deadline("27 May 00:00 UTC+8 to 23:59 SGT", reference_year=2026)
+    assert parsed_range == (datetime(2026, 5, 27, 0, 0), True)
+
+
+def test_normalize_deadline_label_collapses_same_day_full_day_range_to_date_only():
+    formatter = TelegramDigestFormatter()
+
+    normalized = formatter._normalize_deadline_label("May 27 00:00 to 23:59", reference_year=2026)
+    assert normalized == "May 27"
+
+
+def test_collect_descriptive_tasks_keeps_unparseable_items_last_in_original_order():
+    formatter = TelegramDigestFormatter()
+
+    tasks = formatter._collect_descriptive_tasks(
+        email_rows=[
+            {
+                "id": uuid4(),
+                "subject": "Future sprint",
+                "summary": "",
+                "suggested_action": "Handle next sprint item",
+                "extracted_deadlines": ["sometime next sprint"],
+            },
+            {
+                "id": uuid4(),
+                "subject": "Known date",
+                "summary": "",
+                "suggested_action": "Handle dated item",
+                "extracted_deadlines": ["May 28"],
+            },
+            {
+                "id": uuid4(),
+                "subject": "Another unclear date",
+                "summary": "",
+                "suggested_action": "Handle backlog item",
+                "extracted_deadlines": ["after launch"],
+            },
+        ],
+        important_emails=[],
+        reference_year=2026,
+    )
+
+    assert tasks[:3] == [
+        "May 28 — Handle dated item",
+        "sometime next sprint — Handle next sprint item",
+        "after launch — Handle backlog item",
+    ]
 
 
 def test_categorize_email_for_display_direct_human_reply_with_deadline_is_needs_attention():
