@@ -1,20 +1,23 @@
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import settings
 from app.models.digest import Digest
 from app.models.email import Email
 from app.models.email_analysis import EmailAnalysis
 from app.models.user import User
+from app.services.agent_service import AgentService
 from app.services.digest_service import DigestService
 from app.services.gmail_service import GmailService
 
 
 class PipelineService:
-    def __init__(self, gmail_service: GmailService, digest_service: DigestService):
+    def __init__(self, gmail_service: GmailService, digest_service: DigestService, agent_service: AgentService):
         self.gmail_service = gmail_service
         self.digest_service = digest_service
+        self.agent_service = agent_service
 
     def sync_user_emails(self, db: Session, user: User, since: datetime | None = None) -> dict:
         sync_since = since if since is not None else user.last_checked_at
@@ -82,6 +85,10 @@ class PipelineService:
                     "id": email_row.id,
                     "subject": email_row.subject,
                     "sender_email": email_row.sender_email,
+                    "received_at": email_row.received_at,
+                    "is_read": email_row.is_read,
+                    "snippet": email_row.snippet,
+                    "body_text": email_row.body_text,
                     "summary": analysis_row.summary if analysis_row else None,
                     "priority_score": analysis_row.priority_score if analysis_row else 3,
                     "extracted_deadlines": analysis_row.extracted_deadlines if analysis_row else [],
@@ -89,9 +96,26 @@ class PipelineService:
                 }
             )
 
-        output = self.digest_service.build_digest(digest_input)
+        timezone_name = self._resolved_timezone_name(user.timezone)
+        ai_summary = self.agent_service.summarize_digest_window(
+            emails=digest_input,
+            user_timezone=timezone_name,
+        )
+        output = self.digest_service.build_digest(
+            email_rows=digest_input,
+            ai_summary=ai_summary,
+            period_start=period_start_value,
+            period_end=period_end_value,
+            user_timezone=timezone_name,
+        )
+        digest_data = {
+            "email_rows": digest_input,
+            "timezone_name": timezone_name,
+            "generated_at": period_end_value,
+        }
+
         if existing:
-            return {"digest": existing, "output": output, "idempotent_reuse": True}
+            return {"digest": existing, "output": output, "digest_data": digest_data, "idempotent_reuse": True}
 
         record = Digest(
             user_id=user.id,
@@ -104,4 +128,13 @@ class PipelineService:
         db.commit()
         db.refresh(record)
 
-        return {"digest": record, "output": output, "idempotent_reuse": False}
+        return {"digest": record, "output": output, "digest_data": digest_data, "idempotent_reuse": False}
+
+    @staticmethod
+    def _resolved_timezone_name(value: str | None) -> str:
+        timezone_name = (value or "UTC").strip() or "UTC"
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            return "UTC"
+        return timezone_name

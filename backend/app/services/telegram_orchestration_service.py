@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import logging
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -14,21 +15,28 @@ from app.models.user import User
 from app.services.action_execution_service import ActionExecutionService
 from app.services.agent_service import AgentService
 from app.services.pipeline_service import PipelineService
+from app.services.telegram_digest_formatter import TelegramDigestFormatter
 from app.services.telegram_service import TelegramService
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramOrchestrationService:
+    TELEGRAM_MAX_MESSAGE_LEN = 4096
+
     def __init__(
         self,
         pipeline_service: PipelineService,
         agent_service: AgentService,
         telegram_service: TelegramService,
         action_execution_service: ActionExecutionService,
+        telegram_digest_formatter: TelegramDigestFormatter,
     ):
         self.pipeline_service = pipeline_service
         self.agent_service = agent_service
         self.telegram_service = telegram_service
         self.action_execution_service = action_execution_service
+        self.telegram_digest_formatter = telegram_digest_formatter
 
     def sync_and_analyze(self, db: Session, user: User) -> dict:
         sync_result = self.pipeline_service.sync_user_emails(db=db, user=user)
@@ -82,14 +90,31 @@ class TelegramOrchestrationService:
             if not self._reserve_scheduled_run(db=db, user=user, job_type=job_type, run_key=run_key):
                 return {"sent": False, "skipped_duplicate": True}
 
-        result = self.pipeline_service.generate_digest_for_user(
-            db=db,
-            user=user,
-            period_start=period_start,
-            period_end=period_end,
-        )
+        try:
+            result = self.pipeline_service.generate_digest_for_user(
+                db=db,
+                user=user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.warning("digest_generation_failed user_id=%s error=%s", user.id, exc)
+            return {"sent": False, "reason": "digest_generation_failed", "error": str(exc)}
+
         digest = result["digest"]
-        sent_payload = self.telegram_service.send_message(chat_id=user.telegram_chat_id, text=result["output"].digest_text)
+        digest_data = result.get("digest_data") or {}
+        formatted_digest_message = self.telegram_digest_formatter.format_email_digest_for_telegram(
+            digest=result["output"],
+            email_rows=digest_data.get("email_rows"),
+            generated_at=digest_data.get("generated_at"),
+            timezone_name=digest_data.get("timezone_name") or (user.timezone or "UTC"),
+        )
+        sent_payload = self.telegram_service.send_message(
+            chat_id=user.telegram_chat_id,
+            text=self._truncate_telegram_text(formatted_digest_message),
+            parse_mode="Markdown",
+        )
         if not sent_payload:
             return {"sent": False, "digest_id": str(digest.id)}
 
@@ -320,3 +345,14 @@ class TelegramOrchestrationService:
             db.add(action_row)
         db.commit()
         return True
+
+    @classmethod
+    def _truncate_telegram_text(cls, text: str) -> str:
+        if len(text) <= cls.TELEGRAM_MAX_MESSAGE_LEN:
+            return text
+
+        suffix = "\n\n[Message truncated to fit Telegram limits.]"
+        max_body_length = cls.TELEGRAM_MAX_MESSAGE_LEN - len(suffix)
+        if max_body_length <= 0:
+            return text[: cls.TELEGRAM_MAX_MESSAGE_LEN]
+        return text[:max_body_length].rstrip() + suffix

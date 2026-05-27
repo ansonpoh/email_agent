@@ -140,3 +140,52 @@ def test_run_cycle_idempotency_when_tick_repeats_same_slot(monkeypatch):
     assert first["sent_digests"] == 1
     assert second["sent_digests"] == 0
     assert seen_run_keys == {"2026-05-25:1400"}
+
+
+def test_run_cycle_skips_sending_when_digest_generation_fails(monkeypatch):
+    now_utc = datetime(2026, 5, 25, 14, 10, tzinfo=timezone.utc)
+    user_match = _user(tz="UTC", times=["14:00"])
+    users = [user_match]
+
+    class _FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *_conditions):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class _FakeDb:
+        def query(self, _model):
+            return _FakeQuery(users)
+
+        @staticmethod
+        def rollback():
+            return None
+
+        @staticmethod
+        def close():
+            return None
+
+    monkeypatch.setattr(tasks, "SessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(
+        tasks.telegram_orchestration_service,
+        "sync_and_analyze",
+        lambda db, user: {"synced": 0, "fetched": 0, "analysed": 0, "urgent_alerts": 0, "last_checked_at": now_utc},
+    )
+    monkeypatch.setattr(
+        tasks.telegram_orchestration_service,
+        "generate_and_send_digest",
+        lambda db, user, run_key, job_type, period_start, period_end: {
+            "sent": False,
+            "reason": "digest_generation_failed",
+        },
+    )
+
+    result = tasks.run_telegram_cycle(now_utc=now_utc, grace_minutes=20)
+    assert result["status"] == "completed"
+    assert result["processed_users"] == 1
+    assert result["sent_digests"] == 0
+    assert result["failed"] == []

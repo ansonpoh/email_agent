@@ -8,7 +8,13 @@ class TelegramService:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
-    def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict | None:
+    def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        reply_markup: dict | None = None,
+        parse_mode: str | None = None,
+    ) -> dict | None:
         if not settings.telegram_bot_token:
             self.logger.warning("Telegram send skipped because TELEGRAM_BOT_TOKEN is not configured.")
             return None
@@ -16,6 +22,8 @@ class TelegramService:
         payload = {"chat_id": chat_id, "text": text}
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
 
         try:
             data = self._post("sendMessage", payload)

@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.agent_schema import DraftReplyOutput
-from app.schemas.digest_schema import DigestOutput
+from app.schemas.digest_schema import DigestImportantEmail, DigestOutput
 from app.schemas.email_schema import EmailAnalysisOutput
 
 
@@ -34,8 +34,68 @@ def test_email_analysis_output_validates_ranges():
 
 def test_digest_output_shape():
     output = DigestOutput(digest_text="hello")
+    assert output.overview == ""
+    assert output.important_emails == []
     assert output.priority_emails == []
     assert output.suggested_next_steps == []
+
+
+def test_digest_important_emails_limit():
+    with pytest.raises(ValidationError):
+        DigestOutput(
+            digest_text="hello",
+            important_emails=[
+                {
+                    "email_id": "f5af2c78-709e-4f8e-86a2-ef47b5600cb0",
+                    "sender_email": "a@example.com",
+                    "subject": "A",
+                    "status": "unread",
+                    "summary": "s",
+                    "priority_score": 5,
+                    "reason": "r",
+                    "recommended_action": "act",
+                    "deadlines": [],
+                },
+                {
+                    "email_id": "f5af2c78-709e-4f8e-86a2-ef47b5600cb1",
+                    "sender_email": "b@example.com",
+                    "subject": "B",
+                    "status": "unread",
+                    "summary": "s",
+                    "priority_score": 4,
+                    "reason": "r",
+                    "recommended_action": "act",
+                    "deadlines": [],
+                },
+                {
+                    "email_id": "f5af2c78-709e-4f8e-86a2-ef47b5600cb2",
+                    "sender_email": "c@example.com",
+                    "subject": "C",
+                    "status": "unread",
+                    "summary": "s",
+                    "priority_score": 3,
+                    "reason": "r",
+                    "recommended_action": "act",
+                    "deadlines": [],
+                },
+                {
+                    "email_id": "f5af2c78-709e-4f8e-86a2-ef47b5600cb3",
+                    "sender_email": "d@example.com",
+                    "subject": "D",
+                    "status": "unread",
+                    "summary": "s",
+                    "priority_score": 2,
+                    "reason": "r",
+                    "recommended_action": "act",
+                    "deadlines": [],
+                },
+            ],
+        )
+
+
+def test_digest_ai_source_index_must_be_positive():
+    with pytest.raises(ValidationError):
+        DigestImportantEmail(source_index=0, reason="x", recommended_action="y")
 
 
 def test_draft_reply_output_requires_user_review_field():
