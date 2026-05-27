@@ -74,6 +74,54 @@ def test_startup_registers_webhook(monkeypatch):
     assert captured["secret_token"] == "expected-secret"
 
 
+def test_startup_lifecycle_starts_and_stops_inproc_scheduler(monkeypatch):
+    from app import main as app_main
+
+    captured: dict[str, object] = {"started": False, "stopped": False, "jobs": []}
+
+    class _FakeScheduler:
+        def __init__(self, timezone):
+            captured["timezone"] = timezone
+
+        def add_job(self, func, trigger, seconds, id, replace_existing, max_instances, coalesce):
+            captured["jobs"].append(
+                {
+                    "func_name": getattr(func, "__name__", ""),
+                    "trigger": trigger,
+                    "seconds": seconds,
+                    "id": id,
+                    "replace_existing": replace_existing,
+                    "max_instances": max_instances,
+                    "coalesce": coalesce,
+                }
+            )
+
+        def start(self):
+            captured["started"] = True
+
+        def shutdown(self, wait=False):
+            captured["stopped"] = True
+            captured["wait"] = wait
+
+    monkeypatch.setattr(settings, "run_db_migrations_on_startup", False)
+    monkeypatch.setattr(settings, "inproc_scheduler_enabled", True)
+    monkeypatch.setattr(settings, "inproc_scheduler_tick_seconds", 60)
+    monkeypatch.setattr(app_main, "AsyncIOScheduler", _FakeScheduler)
+    monkeypatch.setattr(app_main.telegram_service, "register_webhook_from_settings", lambda: True)
+
+    with TestClient(app):
+        pass
+
+    assert captured["started"] is True
+    assert captured["stopped"] is True
+    assert captured["wait"] is False
+    assert captured["timezone"] == "UTC"
+    assert len(captured["jobs"]) == 1
+    assert captured["jobs"][0]["trigger"] == "interval"
+    assert captured["jobs"][0]["seconds"] == 60
+    assert captured["jobs"][0]["id"] == "inproc-telegram-cycle"
+
+
 def test_telegram_approval_markup_shape():
     markup = TelegramService.approval_markup("abc-123")
     buttons = markup["inline_keyboard"][0]

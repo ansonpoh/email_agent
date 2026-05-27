@@ -82,8 +82,7 @@ class TelegramBotService:
                     "/status - show linked account\n"
                     "/latest - show 10 latest primary inbox emails\n"
                     "/today - summarize today's primary inbox emails with AI\n"
-                    "/sync - sync inbox and analyze new messages\n"
-                    "/digest_schedule status|country|count|times|on|off - manage scheduled digests\n"
+                    "/schedule status|country|count|times|on|off - manage scheduled digests\n"
                     "/pending - list pending approvals\n"
                 ),
             )
@@ -96,23 +95,23 @@ class TelegramBotService:
             )
             return {"ok": True, "message": "status", "user_id": str(user.id)}
 
-        if text.startswith("/digest_schedule"):
-            if text == "/digest_schedule":
+        if text.startswith("/schedule"):
+            if text == "/schedule":
                 self.telegram_service.send_message(
                     chat_id=chat_id,
                     text=(
                         "Usage:\n"
-                        "/digest_schedule status\n"
-                        "/digest_schedule country <country>\n"
-                        "/digest_schedule count <1-3>\n"
-                        "/digest_schedule times <8am,1pm[,6pm]>\n"
-                        "/digest_schedule on\n"
-                        "/digest_schedule off"
+                        "/schedule status\n"
+                        "/schedule country <country>\n"
+                        "/schedule count <1-3>\n"
+                        "/schedule times <8am,1015am[,620pm]>\n"
+                        "/schedule on\n"
+                        "/schedule off"
                     ),
                 )
                 return {"ok": True, "message": "digest_schedule_usage"}
 
-            if text == "/digest_schedule status":
+            if text == "/schedule status":
                 times = self._normalized_schedule_times(user.digest_schedule_times)
                 status = "enabled" if user.scheduled_digest_enabled else "disabled"
                 count_value = getattr(user, "digest_schedule_count", None)
@@ -127,8 +126,8 @@ class TelegramBotService:
                 )
                 return {"ok": True, "message": "digest_schedule_status"}
 
-            if text.startswith("/digest_schedule country "):
-                raw_country = text.removeprefix("/digest_schedule country ").strip()
+            if text.startswith("/schedule country "):
+                raw_country = text.removeprefix("/schedule country ").strip()
                 resolution = resolve_country_timezone(raw_country)
                 if resolution.error:
                     self.telegram_service.send_message(chat_id=chat_id, text=resolution.error)
@@ -148,8 +147,8 @@ class TelegramBotService:
                     "country_code": resolution.country_code,
                 }
 
-            if text.startswith("/digest_schedule count "):
-                raw_count = text.removeprefix("/digest_schedule count ").strip()
+            if text.startswith("/schedule count "):
+                raw_count = text.removeprefix("/schedule count ").strip()
                 count_value, validation_error = self._parse_digest_schedule_count(raw_count)
                 if validation_error:
                     self.telegram_service.send_message(chat_id=chat_id, text=validation_error)
@@ -161,12 +160,12 @@ class TelegramBotService:
                 db.commit()
                 self.telegram_service.send_message(
                     chat_id=chat_id,
-                    text=f"Digest count set to {count_value} per day. Next: /digest_schedule times <8am,1pm>",
+                    text=f"Digest count set to {count_value} per day. Next: /schedule times <8am,1015am>",
                 )
                 return {"ok": True, "message": "digest_schedule_count_set", "count": count_value}
 
-            if text.startswith("/digest_schedule times "):
-                raw_times = text.removeprefix("/digest_schedule times ").strip()
+            if text.startswith("/schedule times "):
+                raw_times = text.removeprefix("/schedule times ").strip()
                 expected_count = getattr(user, "digest_schedule_count", None)
                 schedule_times, validation_error = self._parse_digest_schedule_times_12h(
                     raw_times=raw_times,
@@ -186,21 +185,21 @@ class TelegramBotService:
                 )
                 return {"ok": True, "message": "digest_schedule_set", "times": schedule_times}
 
-            if text == "/digest_schedule on":
+            if text == "/schedule on":
                 count_value = getattr(user, "digest_schedule_count", None)
                 times = self._normalized_schedule_times(user.digest_schedule_times)
                 if not isinstance(count_value, int) or not (1 <= count_value <= 3):
                     self.telegram_service.send_message(
                         chat_id=chat_id,
-                        text="Set count first: /digest_schedule count <1-3>",
+                        text="Set count first: /schedule count <1-3>",
                     )
                     return {"ok": True, "message": "digest_schedule_on_missing_count"}
                 if len(times) != count_value:
                     self.telegram_service.send_message(
                         chat_id=chat_id,
                         text=(
-                            "Complete setup first: /digest_schedule country <country>, "
-                            "/digest_schedule count <1-3>, /digest_schedule times <8am,1pm>"
+                            "Complete setup first: /schedule country <country>, "
+                            "/schedule count <1-3>, /schedule times <8am,1015am>"
                         ),
                     )
                     return {"ok": True, "message": "digest_schedule_on_missing_times"}
@@ -211,7 +210,7 @@ class TelegramBotService:
                 self.telegram_service.send_message(chat_id=chat_id, text="Scheduled digests enabled.")
                 return {"ok": True, "message": "digest_schedule_on"}
 
-            if text == "/digest_schedule off":
+            if text == "/schedule off":
                 user.scheduled_digest_enabled = False
                 db.add(user)
                 db.commit()
@@ -222,12 +221,12 @@ class TelegramBotService:
                 chat_id=chat_id,
                 text=(
                     "Usage:\n"
-                    "/digest_schedule status\n"
-                    "/digest_schedule country <country>\n"
-                    "/digest_schedule count <1-3>\n"
-                    "/digest_schedule times <8am,1pm[,6pm]>\n"
-                    "/digest_schedule on\n"
-                    "/digest_schedule off"
+                    "/schedule status\n"
+                    "/schedule country <country>\n"
+                    "/schedule count <1-3>\n"
+                    "/schedule times <8am,1015am[,620pm]>\n"
+                    "/schedule on\n"
+                    "/schedule off"
                 ),
             )
             return {"ok": True, "message": "digest_schedule_usage"}
@@ -285,17 +284,6 @@ class TelegramBotService:
                 text=self._truncate_telegram_text(text_payload),
             )
             return {"ok": True, "message": "today", "count": int(result.get("count", 0))}
-
-        if text == "/sync":
-            result = self.orchestration_service.sync_and_analyze(db=db, user=user)
-            self.telegram_service.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"Sync complete.\nFetched: {result['fetched']}\nNew: {result['synced']}\n"
-                    f"Analysed: {result['analysed']}\nUrgent alerts: {result['urgent_alerts']}"
-                ),
-            )
-            return {"ok": True, "message": "sync", "result": result}
 
         if text == "/pending":
             result = self.orchestration_service.send_pending_actions(db=db, user=user)
@@ -377,7 +365,7 @@ class TelegramBotService:
     @classmethod
     def _parse_digest_schedule_count(cls, raw_count: str) -> tuple[int | None, str | None]:
         if not raw_count:
-            return None, "Usage: /digest_schedule count <1-3>"
+            return None, "Usage: /schedule count <1-3>"
         if not raw_count.isdigit():
             return None, "Count must be a number from 1 to 3."
 
@@ -389,17 +377,18 @@ class TelegramBotService:
     @staticmethod
     def _parse_12h_hour_token(raw: str) -> str | None:
         normalized = raw.strip().lower().replace(" ", "")
-        match = re.fullmatch(r"(1[0-2]|[1-9])(am|pm)", normalized)
+        match = re.fullmatch(r"(1[0-2]|0?[1-9])(?::?([0-5][0-9]))?(am|pm)", normalized)
         if not match:
             return None
 
         hour_12 = int(match.group(1))
-        suffix = match.group(2)
+        minute = int(match.group(2)) if match.group(2) else 0
+        suffix = match.group(3)
         if suffix == "am":
             hour_24 = 0 if hour_12 == 12 else hour_12
         else:
             hour_24 = 12 if hour_12 == 12 else hour_12 + 12
-        return f"{hour_24:02d}:00"
+        return f"{hour_24:02d}:{minute:02d}"
 
     @classmethod
     def _parse_digest_schedule_times_12h(
@@ -408,11 +397,11 @@ class TelegramBotService:
         expected_count: int | None,
     ) -> tuple[list[str], str | None]:
         if not isinstance(expected_count, int) or not (1 <= expected_count <= 3):
-            return [], "Set count first: /digest_schedule count <1-3>"
+            return [], "Set count first: /schedule count <1-3>"
 
         entries = [item.strip() for item in raw_times.split(",") if item.strip()]
         if not entries:
-            return [], "Provide times using 12-hour format: /digest_schedule times <8am,1pm[,6pm]>"
+            return [], "Provide times using 12-hour format: /schedule times <8am,1015am[,620pm]>"
         if len(entries) != expected_count:
             return [], f"Count mismatch. You set {expected_count}; please provide exactly {expected_count} time(s)."
 
@@ -420,7 +409,7 @@ class TelegramBotService:
         for item in entries:
             slot = cls._parse_12h_hour_token(item)
             if slot is None:
-                return [], f"Invalid time '{item}'. Use hours-only 12-hour format like 8am or 1pm."
+                return [], f"Invalid time '{item}'. Use 12-hour format like 8am, 1015am, or 6:20pm."
             normalized.append(slot)
 
         unique = sorted(set(normalized))

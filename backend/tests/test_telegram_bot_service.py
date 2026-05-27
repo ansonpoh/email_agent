@@ -171,6 +171,7 @@ def test_help_lists_latest_command():
     assert result["message"] == "help"
     assert "/latest - show 10 latest primary inbox emails" in telegram.messages[-1]["text"]
     assert "/today - summarize today's primary inbox emails with AI" in telegram.messages[-1]["text"]
+    assert "/sync - sync inbox and analyze new messages" not in telegram.messages[-1]["text"]
     assert "/digest - send latest digest" not in telegram.messages[-1]["text"]
     assert "/timezone set <IANA>" not in telegram.messages[-1]["text"]
     assert "/rules - list active rules" not in telegram.messages[-1]["text"]
@@ -296,7 +297,7 @@ def test_digest_schedule_country_sets_timezone_for_single_timezone_country():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule country Singapore", "chat": {"id": "1008"}}},
+        update={"message": {"text": "/schedule country Singapore", "chat": {"id": "1008"}}},
     )
     assert result["message"] == "digest_schedule_country_set"
     assert user.timezone == "Asia/Singapore"
@@ -310,7 +311,7 @@ def test_digest_schedule_country_uses_capital_override_for_multi_timezone_countr
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule country USA", "chat": {"id": "1009"}}},
+        update={"message": {"text": "/schedule country USA", "chat": {"id": "1009"}}},
     )
     assert result["message"] == "digest_schedule_country_set"
     assert user.timezone == "America/New_York"
@@ -324,7 +325,7 @@ def test_digest_schedule_count_accepts_1_to_3_and_rejects_invalid():
 
     ok_result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule count 2", "chat": {"id": "1010"}}},
+        update={"message": {"text": "/schedule count 2", "chat": {"id": "1010"}}},
     )
     assert ok_result["message"] == "digest_schedule_count_set"
     assert user.digest_schedule_count == 2
@@ -332,7 +333,7 @@ def test_digest_schedule_count_accepts_1_to_3_and_rejects_invalid():
 
     invalid_result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule count 4", "chat": {"id": "1010"}}},
+        update={"message": {"text": "/schedule count 4", "chat": {"id": "1010"}}},
     )
     assert invalid_result["message"] == "digest_schedule_invalid"
     assert telegram.messages[-1]["text"] == "Count must be between 1 and 3."
@@ -347,11 +348,27 @@ def test_digest_schedule_times_parses_12h_and_enables_schedule():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1011"}}},
+        update={"message": {"text": "/schedule times 8am,1pm", "chat": {"id": "1011"}}},
     )
     assert result["message"] == "digest_schedule_set"
     assert user.scheduled_digest_enabled is True
     assert user.digest_schedule_times == ["08:00", "13:00"]
+
+
+def test_digest_schedule_times_parses_12h_with_minutes_and_enables_schedule():
+    user = _linked_user("1111")
+    user.digest_schedule_count = 2
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={"message": {"text": "/schedule times 1015am,620pm", "chat": {"id": "1111"}}},
+    )
+    assert result["message"] == "digest_schedule_set"
+    assert user.scheduled_digest_enabled is True
+    assert user.digest_schedule_times == ["10:15", "18:20"]
 
 
 def test_digest_schedule_times_count_mismatch_preserves_previous_schedule():
@@ -365,7 +382,7 @@ def test_digest_schedule_times_count_mismatch_preserves_previous_schedule():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1012"}}},
+        update={"message": {"text": "/schedule times 8am,1pm", "chat": {"id": "1012"}}},
     )
     assert result["message"] == "digest_schedule_invalid"
     assert user.digest_schedule_times == ["08:00", "13:00", "18:00"]
@@ -380,7 +397,7 @@ def test_digest_schedule_old_set_format_is_rejected():
 
     result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule set 09:00", "chat": {"id": "1013"}}},
+        update={"message": {"text": "/schedule set 09:00", "chat": {"id": "1013"}}},
     )
     assert result["message"] == "digest_schedule_usage"
 
@@ -391,11 +408,11 @@ def test_digest_schedule_on_rejects_until_count_and_times_are_complete():
     telegram = _FakeTelegramService()
     service = _build_service(telegram)
 
-    first = service.handle_update(db=db, update={"message": {"text": "/digest_schedule on", "chat": {"id": "1014"}}})
+    first = service.handle_update(db=db, update={"message": {"text": "/schedule on", "chat": {"id": "1014"}}})
     assert first["message"] == "digest_schedule_on_missing_count"
 
     user.digest_schedule_count = 2
-    second = service.handle_update(db=db, update={"message": {"text": "/digest_schedule on", "chat": {"id": "1014"}}})
+    second = service.handle_update(db=db, update={"message": {"text": "/schedule on", "chat": {"id": "1014"}}})
     assert second["message"] == "digest_schedule_on_missing_times"
 
 
@@ -407,15 +424,15 @@ def test_digest_schedule_three_step_flow_auto_enables_schedule():
 
     country_result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule country Singapore", "chat": {"id": "1015"}}},
+        update={"message": {"text": "/schedule country Singapore", "chat": {"id": "1015"}}},
     )
     count_result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule count 2", "chat": {"id": "1015"}}},
+        update={"message": {"text": "/schedule count 2", "chat": {"id": "1015"}}},
     )
     times_result = service.handle_update(
         db=db,
-        update={"message": {"text": "/digest_schedule times 8am,1pm", "chat": {"id": "1015"}}},
+        update={"message": {"text": "/schedule times 8am,1pm", "chat": {"id": "1015"}}},
     )
 
     assert country_result["message"] == "digest_schedule_country_set"
@@ -437,7 +454,7 @@ def test_digest_schedule_status_displays_toggle_timezone_count_and_times():
     telegram = _FakeTelegramService()
     service = _build_service(telegram)
 
-    result = service.handle_update(db=db, update={"message": {"text": "/digest_schedule status", "chat": {"id": "1016"}}})
+    result = service.handle_update(db=db, update={"message": {"text": "/schedule status", "chat": {"id": "1016"}}})
     assert result["message"] == "digest_schedule_status"
     text = telegram.messages[-1]["text"]
     assert "Digest schedule is enabled." in text
@@ -479,3 +496,14 @@ def test_removed_rules_commands_return_unknown():
         result = service.handle_update(db=db, update={"message": {"text": command, "chat": {"id": "1019"}}})
         assert result["message"] == "unknown_command"
         assert telegram.messages[-1]["text"] == "Unknown command. Send /help."
+
+
+def test_removed_sync_command_returns_unknown():
+    user = _linked_user("1020")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/sync", "chat": {"id": "1020"}}})
+    assert result["message"] == "unknown_command"
+    assert telegram.messages[-1]["text"] == "Unknown command. Send /help."

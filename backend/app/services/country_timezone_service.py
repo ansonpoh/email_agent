@@ -55,7 +55,7 @@ def resolve_country_timezone(raw_country: str) -> CountryTimezoneResolution:
             timezone=None,
             country_code=None,
             country_name=None,
-            error="Usage: /digest_schedule country <country>",
+            error="Usage: /schedule country <country>",
         )
 
     normalized_key = query.lower()
@@ -72,7 +72,7 @@ def resolve_country_timezone(raw_country: str) -> CountryTimezoneResolution:
                 timezone=None,
                 country_code=None,
                 country_name=None,
-                error=f"Unknown country '{query}'. Example: /digest_schedule country Singapore",
+                error=f"Unknown country '{query}'. Example: /schedule country Singapore",
             )
 
     country_code = str(getattr(country, "alpha_2", "")).upper()

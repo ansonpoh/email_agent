@@ -51,16 +51,33 @@ This system never sends emails automatically.
 3. Install backend dependencies:
    - `cd backend && pip install -r requirements.txt`
 
-## Run
+## Run (Desktop Self-Hosting)
 
-Docker Compose:
-- `docker compose up --build`
+1. Copy and configure env:
+   - `Copy-Item .env.example .env`
+   - Keep `DATABASE_URL` pointed to your existing cloud Postgres.
+   - Set `TELEGRAM_WEBHOOK_BASE_URL=https://<your-stable-tunnel-domain>`.
+   - Set `GOOGLE_REDIRECT_URI=https://<your-stable-tunnel-domain>/auth/google/callback`.
+   - Keep `TELEGRAM_WEBHOOK_SECRET_TOKEN` set.
+2. Start API, worker, and Redis:
+   - `docker compose up -d --build`
+3. Verify local health:
+   - `curl.exe -sS http://localhost:8000/health`
 
-Local services:
-- Backend API: `cd backend && uvicorn app.main:app --reload`
-- Celery worker: `cd backend && celery -A app.workers.tasks worker --loglevel=info`
-- Celery beat: `cd backend && celery -A app.workers.tasks beat --loglevel=info`
-- Migrations: `cd backend && alembic upgrade head`
+### Optional: Run Cloudflare Tunnel in Docker
+- Set `CLOUDFLARED_TUNNEL_TOKEN` in `.env`.
+- Start tunnel profile:
+  - `docker compose --profile tunnel up -d`
+
+### Optional: Run Cloudflare Tunnel as Windows Service
+- Install `cloudflared` and run (admin terminal):
+  - `cloudflared.exe service install <TUNNEL_TOKEN>`
+- This enables tunnel auto-start on reboot.
+
+### Persistence on Reboot
+- Containers use `restart: unless-stopped` in `docker-compose.yml`.
+- Enable Docker Desktop auto-start on login.
+- Ensure your tunnel client (Docker profile or Windows service) auto-starts.
 
 Notes:
 - Backend startup runs `alembic upgrade head` automatically by default (`RUN_DB_MIGRATIONS_ON_STARTUP=true`).
@@ -73,14 +90,13 @@ Notes:
 4. Google calls back to `GET /auth/google/callback` and the backend auto-links your `telegram_chat_id`.
 5. Operate through Telegram:
    - `/status`
-   - `/sync`
    - `/today`
-   - `/digest_schedule country <country>`
-   - `/digest_schedule count <1-3>`
-   - `/digest_schedule times <8am,1pm[,6pm]>`
-   - `/digest_schedule status`
-   - `/digest_schedule on`
-   - `/digest_schedule off`
+   - `/schedule country <country>`
+   - `/schedule count <1-3>`
+   - `/schedule times <8am,1pm[,6pm]>`
+   - `/schedule status`
+   - `/schedule on`
+   - `/schedule off`
    - `/pending`
 
 ## Telegram Webhook
@@ -88,11 +104,25 @@ Notes:
 - Backend startup auto-registers webhook at:
   - `<TELEGRAM_WEBHOOK_BASE_URL>/telegram/webhook`
 - Localhost is not reachable by Telegram unless exposed via secure tunnel/reverse proxy.
+- Telegram webhook delivery requires HTTPS and supported ports (`443`, `80`, `88`, `8443`).
 - Verify webhook status:
 
 ```bash
-curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
+curl.exe -sS "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ```
+
+## Cutover From Render to Desktop
+1. Start local stack and tunnel, then confirm:
+   - `curl.exe -sS http://localhost:8000/health`
+   - `curl.exe -sS https://<your-stable-tunnel-domain>/health`
+2. Check webhook now targets desktop domain:
+   - `curl.exe -sS "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"`
+   - Confirm `url` is `https://<your-stable-tunnel-domain>/telegram/webhook`.
+3. Run Telegram checks:
+   - `/start`, `/status`, `/today`
+4. Run OAuth check:
+   - `/connect`, complete login, verify callback success page and chat link.
+5. Disable/scale down Render service after verification to avoid dual-processing.
 
 ## Backend API Endpoints
 - `GET /health`

@@ -42,36 +42,68 @@ def _resolved_timezone(value: str | None):
         return timezone.utc
 
 
-def _current_slot_window(user: User, now_utc: datetime) -> dict | None:
-    schedule_times = _normalized_schedule_times(user.digest_schedule_times)
-    if not schedule_times:
-        return None
+def _slot_minute_marks(schedule_times: list[str]) -> list[int]:
+    return sorted({int(slot[:2]) * 60 + int(slot[3:]) for slot in schedule_times})
 
-    user_tz = _resolved_timezone(user.timezone)
-    now_local = now_utc.astimezone(user_tz).replace(second=0, microsecond=0)
-    current_slot = now_local.strftime("%H:%M")
-    if current_slot not in schedule_times:
-        return None
 
-    minute_marks = sorted({int(slot[:2]) * 60 + int(slot[3:]) for slot in schedule_times})
-    current_minutes = int(current_slot[:2]) * 60 + int(current_slot[3:])
-    slot_idx = minute_marks.index(current_minutes)
-    previous_minutes = minute_marks[slot_idx - 1] if slot_idx > 0 else minute_marks[-1]
-
-    current_boundary = now_local.replace(hour=int(current_slot[:2]), minute=int(current_slot[3:]), second=0, microsecond=0)
-    previous_date = current_boundary.date() if slot_idx > 0 else (current_boundary - timedelta(days=1)).date()
+def _build_slot_window(
+    *,
+    user_tz,
+    minute_marks: list[int],
+    slot_index: int,
+    slot_boundary_local: datetime,
+) -> dict:
+    current_minutes = minute_marks[slot_index]
+    previous_minutes = minute_marks[slot_index - 1] if slot_index > 0 else minute_marks[-1]
+    previous_date = slot_boundary_local.date() if slot_index > 0 else (slot_boundary_local - timedelta(days=1)).date()
     previous_boundary = datetime.combine(
         previous_date,
         time(hour=previous_minutes // 60, minute=previous_minutes % 60),
         tzinfo=user_tz,
     )
-
+    slot_time = f"{current_minutes // 60:02d}:{current_minutes % 60:02d}"
     return {
-        "slot_time": current_slot,
-        "local_date": current_boundary.date().isoformat(),
+        "slot_time": slot_time,
+        "local_date": slot_boundary_local.date().isoformat(),
         "period_start_utc": previous_boundary.astimezone(timezone.utc),
-        "period_end_utc": current_boundary.astimezone(timezone.utc),
+        "period_end_utc": slot_boundary_local.astimezone(timezone.utc),
     }
+
+
+def _due_slot_windows(user: User, now_utc: datetime, grace_minutes: int) -> list[dict]:
+    schedule_times = _normalized_schedule_times(user.digest_schedule_times)
+    if not schedule_times:
+        return []
+
+    user_tz = _resolved_timezone(user.timezone)
+    now_local = now_utc.astimezone(user_tz).replace(second=0, microsecond=0)
+    grace_window = max(grace_minutes, 0)
+    window_start_local = now_local - timedelta(minutes=grace_window)
+    minute_marks = _slot_minute_marks(schedule_times)
+
+    candidate_dates = {now_local.date()}
+    if window_start_local.date() != now_local.date():
+        candidate_dates.add(window_start_local.date())
+
+    due_windows: list[dict] = []
+    for candidate_date in sorted(candidate_dates):
+        for slot_index, minute_mark in enumerate(minute_marks):
+            slot_boundary_local = datetime.combine(
+                candidate_date,
+                time(hour=minute_mark // 60, minute=minute_mark % 60),
+                tzinfo=user_tz,
+            )
+            if window_start_local <= slot_boundary_local <= now_local:
+                due_windows.append(
+                    _build_slot_window(
+                        user_tz=user_tz,
+                        minute_marks=minute_marks,
+                        slot_index=slot_index,
+                        slot_boundary_local=slot_boundary_local,
+                    )
+                )
+
+    return sorted(due_windows, key=lambda item: item["period_end_utc"])
 
 
 @celery_app.task(name="app.workers.tasks.sync_user_emails")
@@ -121,11 +153,19 @@ def generate_user_digest(user_id: UUID) -> dict:
 
 @celery_app.task(name="app.workers.tasks.run_hourly_telegram_cycle")
 def run_hourly_telegram_cycle() -> dict:
+    return run_telegram_cycle()
+
+
+def run_telegram_cycle(*, now_utc: datetime | None = None, grace_minutes: int | None = None) -> dict:
     if not settings.telegram_scheduler_enabled:
         return {"status": "skipped", "reason": "scheduler_disabled"}
 
     db = SessionLocal()
-    now = datetime.now(timezone.utc)
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(second=0, microsecond=0)
+    resolved_grace_minutes = max(
+        settings.inproc_scheduler_grace_minutes if grace_minutes is None else grace_minutes,
+        0,
+    )
     completed = 0
     sent_digests = 0
     failed: list[dict] = []
@@ -139,21 +179,30 @@ def run_hourly_telegram_cycle() -> dict:
         )
         for user in users:
             try:
-                slot_window = _current_slot_window(user=user, now_utc=now)
-                if not slot_window:
-                    continue
-                telegram_orchestration_service.sync_and_analyze(db=db, user=user)
-                digest = telegram_orchestration_service.generate_and_send_digest(
-                    db=db,
+                due_windows = _due_slot_windows(
                     user=user,
-                    run_key=f"{slot_window['local_date']}:{slot_window['slot_time'].replace(':', '')}",
-                    job_type="custom_schedule_digest",
-                    period_start=slot_window["period_start_utc"],
-                    period_end=slot_window["period_end_utc"],
+                    now_utc=now,
+                    grace_minutes=resolved_grace_minutes,
                 )
-                completed += 1
-                if digest.get("sent"):
-                    sent_digests += 1
+                if not due_windows:
+                    continue
+
+                synced_for_user = False
+                for slot_window in due_windows:
+                    if not synced_for_user:
+                        telegram_orchestration_service.sync_and_analyze(db=db, user=user)
+                        synced_for_user = True
+                    digest = telegram_orchestration_service.generate_and_send_digest(
+                        db=db,
+                        user=user,
+                        run_key=f"{slot_window['local_date']}:{slot_window['slot_time'].replace(':', '')}",
+                        job_type="custom_schedule_digest",
+                        period_start=slot_window["period_start_utc"],
+                        period_end=slot_window["period_end_utc"],
+                    )
+                    completed += 1
+                    if digest.get("sent"):
+                        sent_digests += 1
             except Exception as exc:
                 db.rollback()
                 logger.exception("run_hourly_telegram_cycle user failure user_id=%s", user.id)

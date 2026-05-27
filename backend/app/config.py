@@ -83,6 +83,9 @@ class Settings:
     )
     telegram_urgent_threshold: int = int(os.getenv("TELEGRAM_URGENT_THRESHOLD", "5"))
     telegram_scheduler_enabled: bool = _parse_bool(os.getenv("TELEGRAM_SCHEDULER_ENABLED", "true"), True)
+    inproc_scheduler_enabled: bool = _parse_bool(os.getenv("INPROC_SCHEDULER_ENABLED", "true"), True)
+    inproc_scheduler_tick_seconds: int = int(os.getenv("INPROC_SCHEDULER_TICK_SECONDS", "60"))
+    inproc_scheduler_grace_minutes: int = int(os.getenv("INPROC_SCHEDULER_GRACE_MINUTES", "20"))
 
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "CHANGE_ME_WITH_32_CHAR_MIN_SECRET")
     digest_idempotency_window_minutes: int = int(os.getenv("DIGEST_IDEMPOTENCY_WINDOW_MINUTES", "15"))

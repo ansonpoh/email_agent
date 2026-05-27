@@ -1,8 +1,11 @@
 import logging
 import time
+from asyncio import to_thread
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import uuid4
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -13,6 +16,7 @@ from app.config import settings
 from app.api import actions, auth, digests, drafts, emails, telegram
 from app.db.migrations import run_db_migrations
 from app.deps import telegram_service
+from app.workers.tasks import run_telegram_cycle
 
 logger = logging.getLogger("email_agent")
 logging.basicConfig(
@@ -21,8 +25,17 @@ logging.basicConfig(
 )
 
 
+async def run_inproc_scheduler_cycle() -> None:
+    await to_thread(
+        run_telegram_cycle,
+        now_utc=datetime.now(timezone.utc),
+        grace_minutes=settings.inproc_scheduler_grace_minutes,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    scheduler: AsyncIOScheduler | None = None
     if settings.run_db_migrations_on_startup:
         try:
             run_db_migrations()
@@ -35,7 +48,33 @@ async def lifespan(_app: FastAPI):
         telegram_service.register_webhook_from_settings()
     except Exception:
         logger.exception("telegram_webhook_startup_registration_failed")
+
+    if settings.inproc_scheduler_enabled:
+        try:
+            tick_seconds = max(settings.inproc_scheduler_tick_seconds, 1)
+            scheduler = AsyncIOScheduler(timezone="UTC")
+            scheduler.add_job(
+                run_inproc_scheduler_cycle,
+                trigger="interval",
+                seconds=tick_seconds,
+                id="inproc-telegram-cycle",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            scheduler.start()
+            logger.info(
+                "inproc_scheduler_started tick_seconds=%s grace_minutes=%s",
+                tick_seconds,
+                settings.inproc_scheduler_grace_minutes,
+            )
+        except Exception:
+            scheduler = None
+            logger.exception("inproc_scheduler_startup_failed")
     yield
+    if scheduler:
+        scheduler.shutdown(wait=False)
+        logger.info("inproc_scheduler_stopped")
 
 
 app = FastAPI(title="Gmail Agent Assistant", version="0.1.0", lifespan=lifespan)
