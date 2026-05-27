@@ -60,6 +60,53 @@ class TelegramDigestFormatter:
         "welcome",
         "newsletter",
     )
+    _REPLY_NEEDED_KEYWORDS = (
+        "reply",
+        "respond",
+        "confirm",
+        "availability",
+        "schedule",
+        "meeting",
+        "lunch",
+        "interview",
+        "follow up",
+        "propose time",
+    )
+    _AUTOMATED_SENDER_TERMS = (
+        "noreply",
+        "no-reply",
+        "do-not-reply",
+        "donotreply",
+        "notification",
+        "notifications",
+        "newsletter",
+        "jobalerts",
+        "job-alerts",
+        "jobs-noreply",
+        "updates",
+        "marketing",
+        "promo",
+        "alerts",
+        "receipt",
+    )
+    _AUTOMATED_TEXT_KEYWORDS = (
+        "newsletter",
+        "unsubscribe",
+        "job alert",
+        "job alerts",
+        "promotion",
+        "promotional",
+        "discount",
+        "deal",
+        "receipt",
+        "invoice",
+        "verification code",
+        "otp",
+        "system notification",
+        "automated notification",
+        "do not reply",
+        "no reply",
+    )
 
     def format_email_digest_for_telegram(
         self,
@@ -83,21 +130,26 @@ class TelegramDigestFormatter:
             important_emails=digest.important_emails,
             reference_year=generated_at_local.year,
         )
+        events_deadlines_entries = self._events_deadlines_entries(
+            tasks=tasks,
+            event_emails=important_grouped["events"],
+        )
+        summary_groups = self._summary_display_groups(
+            needs_attention_emails=important_grouped["needs_attention"],
+            events_deadlines_entries=events_deadlines_entries,
+            grouped_rows=all_grouped,
+        )
         summary = self.format_summary_section(
             digest=digest,
-            needs_attention_emails=important_grouped["needs_attention"],
-            security_count=self._security_count(email_rows=email_rows, important_emails=digest.important_emails),
-            event_count=len(tasks),
-            jobs_count=len(all_grouped["jobs"]),
+            display_groups=summary_groups,
         )
         needs_attention_section = self.format_needs_attention_section(
             emails=important_grouped["needs_attention"],
             timezone_name=timezone_name,
             local_tz=tz,
         )
-        events_deadlines_section = self.format_events_deadlines_section(tasks=tasks, emails=important_grouped["events"])
-        jobs_section = self.format_jobs_section(all_grouped["jobs"])
-        optional_info_section = self.format_optional_information_section(all_grouped["optional"])
+        events_deadlines_section = self.format_events_deadlines_section(tasks=events_deadlines_entries, emails=[])
+        optional_info_section = self.format_optional_information_section(self._visible_optional_rows(grouped_rows=all_grouped))
         main_actions, optional_actions = self._split_actions(digest.suggested_actions)
         suggested_actions = self.format_suggested_actions(main_actions, optional_actions)
 
@@ -127,12 +179,6 @@ class TelegramDigestFormatter:
             "",
             "---",
             "",
-            "<b>💼 Jobs / Opportunities</b>",
-            "",
-            jobs_section,
-            "",
-            "---",
-            "",
             "<b>ℹ️ Optional / Informational</b>",
             "",
             optional_info_section,
@@ -149,23 +195,31 @@ class TelegramDigestFormatter:
         self,
         *,
         digest: DigestOutput,
-        needs_attention_emails: list[DigestImportantEmailDetail],
-        security_count: int,
-        event_count: int,
-        jobs_count: int,
+        display_groups: dict[str, list],
     ) -> str:
         bullets: list[str] = []
+        needs_attention_emails = display_groups["needs_attention"]
+        security_emails = display_groups["security"]
+        events_deadlines = display_groups["events_deadlines"]
+        jobs_emails = display_groups["jobs_opportunities"]
 
         if needs_attention_emails:
             top_subject = self._compact_text(needs_attention_emails[0].subject or "(No subject)", max_len=72)
             count = len(needs_attention_emails)
             verb = "need" if count != 1 else "needs"
             bullets.append(f"• {count} email{'s' if count != 1 else ''} {verb} attention: {top_subject}")
-        if security_count:
-            bullets.append(f"• {security_count} security alert{'s' if security_count != 1 else ''} need review")
-        if event_count:
+        if security_emails:
+            security_count = len(security_emails)
+            if security_count == 1:
+                subject = self._compact_text(security_emails[0].subject or "(No subject)", max_len=72)
+                bullets.append(f"• 1 security alert needs review: {subject}")
+            else:
+                bullets.append(f"• {security_count} security alerts need review")
+        if events_deadlines:
+            event_count = len(events_deadlines)
             bullets.append(f"• {event_count} event/deadline item{'s' if event_count != 1 else ''} with clear context")
-        if jobs_count:
+        if jobs_emails:
+            jobs_count = len(jobs_emails)
             bullets.append(f"• {jobs_count} job/opportunity email{'s' if jobs_count != 1 else ''} identified")
 
         if not bullets:
@@ -174,31 +228,99 @@ class TelegramDigestFormatter:
 
         return "\n".join(self.escape_telegram_text(item) for item in bullets[:4])
 
+    def _summary_display_groups(
+        self,
+        *,
+        needs_attention_emails: list[DigestImportantEmailDetail],
+        events_deadlines_entries: list[str],
+        grouped_rows: dict[str, list[dict]],
+    ) -> dict[str, list]:
+        visible_jobs = grouped_rows["jobs"][:6]
+        visible_optional = grouped_rows["optional"][: max(0, 6 - len(visible_jobs))]
+        security_emails = [email for email in needs_attention_emails if self._is_security_email(email)]
+        return {
+            "needs_attention": needs_attention_emails,
+            "security": security_emails,
+            "events_deadlines": events_deadlines_entries,
+            "jobs_opportunities": visible_jobs,
+            "optional": visible_optional,
+        }
+
+    def _visible_optional_rows(self, *, grouped_rows: dict[str, list[dict]]) -> list[dict]:
+        merged_optional_rows = [*grouped_rows["jobs"], *grouped_rows["optional"]]
+        return merged_optional_rows[:6]
+
+    def _events_deadlines_entries(
+        self,
+        *,
+        tasks: list[str],
+        event_emails: list[DigestImportantEmailDetail],
+    ) -> list[str]:
+        if tasks:
+            return tasks[:8]
+        return [self._compact_text(email.subject or "(No subject)", max_len=100) for email in event_emails[:5]]
+
+    def _is_security_email(self, email: DigestImportantEmailDetail | dict) -> bool:
+        fields = self._email_fields(email)
+        text_blob = self._normalized_display_text(fields)
+        return self._contains_keyword(text_blob, self._SECURITY_KEYWORDS)
+
     def categorize_email_for_display(self, email: DigestImportantEmailDetail | dict) -> str:
         fields = self._email_fields(email)
-        text_blob = " ".join(
-            [
-                fields["subject"],
-                fields["summary"],
-                fields["reason"],
-                fields["recommended_action"],
-                fields["status"],
-            ]
-        ).casefold()
+        text_blob = self._normalized_display_text(fields)
         has_deadline = bool(fields["deadlines"])
-        priority_score = fields["priority_score"]
 
         if self._contains_keyword(text_blob, self._SECURITY_KEYWORDS):
+            return "needs_attention"
+        if (
+            self._is_human_sender(fields)
+            and self._is_reply_needed(fields)
+            and not self._is_excluded_automated_email(fields)
+        ):
             return "needs_attention"
         if self._contains_keyword(text_blob, self._JOB_KEYWORDS):
             return "jobs"
         if has_deadline or self._contains_keyword(text_blob, self._EVENT_KEYWORDS):
             return "events"
-        if priority_score >= 4 or "reply" in text_blob or "urgent" in text_blob or "action required" in text_blob:
+        if fields["priority_score"] >= 4 or "urgent" in text_blob or "action required" in text_blob:
             return "needs_attention"
         if self._contains_keyword(text_blob, self._PROMO_KEYWORDS):
             return "optional"
         return "optional"
+
+    def _is_human_sender(self, fields: dict) -> bool:
+        sender = str(fields.get("sender_email") or "").casefold().strip()
+        if not sender or "@" not in sender:
+            return False
+        return not self._contains_keyword(sender, self._AUTOMATED_SENDER_TERMS)
+
+    def _is_reply_needed(self, fields: dict) -> bool:
+        text_blob = self._normalized_display_text(fields)
+        return self._contains_keyword(text_blob, self._REPLY_NEEDED_KEYWORDS)
+
+    def _is_excluded_automated_email(self, fields: dict) -> bool:
+        sender = str(fields.get("sender_email") or "").casefold()
+        if self._contains_keyword(sender, self._AUTOMATED_SENDER_TERMS):
+            return True
+
+        text_blob = self._normalized_display_text(fields)
+        return self._contains_keyword(text_blob, self._AUTOMATED_TEXT_KEYWORDS)
+
+    @staticmethod
+    def _normalized_display_text(fields: dict) -> str:
+        pieces = [
+            str(fields.get("sender_email") or ""),
+            str(fields.get("subject") or ""),
+            str(fields.get("summary") or ""),
+            str(fields.get("reason") or ""),
+            str(fields.get("why_important") or ""),
+            str(fields.get("recommended_action") or ""),
+            str(fields.get("status") or ""),
+            str(fields.get("category") or ""),
+            str(fields.get("priority") or ""),
+            str(fields.get("priority_score") or ""),
+        ]
+        return " ".join(pieces).casefold()
 
     def format_needs_attention_section(
         self,
@@ -260,17 +382,24 @@ class TelegramDigestFormatter:
     def format_optional_information_section(self, emails: list[dict]) -> str:
         if not emails:
             return "No optional informational emails highlighted."
-        items = [
-            self._compact_text(item.get("subject") or "(No subject)", max_len=120)
-            for item in emails[:6]
-        ]
-        return "\n".join(f"• {self.escape_telegram_text(item)}" for item in items)
+        lines: list[str] = []
+        for item in emails[:6]:
+            subject = self._compact_text(item.get("subject") or "(No subject)", max_len=120)
+            sender = self._compact_text(item.get("sender_email") or "unknown@example.com", max_len=100)
+            lines.extend(
+                [
+                    f"• {self.escape_telegram_text(subject)}",
+                    f"From: {self.escape_telegram_text(sender)}",
+                    "",
+                ]
+            )
+        return "\n".join(lines).strip()
 
     def format_suggested_actions(self, actions: list[str], optional_actions: list[str]) -> str:
         lines: list[str] = []
 
         if actions:
-            lines.extend(f"☐ {self.escape_telegram_text(action)}" for action in actions[:8])
+            lines.extend(f"• {self.escape_telegram_text(action)}" for action in actions[:8])
         else:
             lines.append("No suggested actions.")
 
@@ -320,40 +449,49 @@ class TelegramDigestFormatter:
         important_emails: list[DigestImportantEmailDetail],
         reference_year: int,
     ) -> list[str]:
-        tasks: list[str] = []
+        entries: list[tuple[str, datetime | None, int]] = []
+        original_index = 0
 
         if email_rows:
             for row in email_rows:
                 for deadline in row.get("extracted_deadlines") or []:
-                    deadline_label = self._normalize_deadline_label(str(deadline), reference_year=reference_year)
+                    deadline_text = str(deadline)
+                    deadline_label = self._normalize_deadline_label(deadline_text, reference_year=reference_year)
+                    parsed_deadline = self._try_parse_deadline(deadline_text, reference_year=reference_year)
+                    parsed_dt = parsed_deadline[0] if parsed_deadline else None
                     description = self._task_description_from_row(row)
                     item = self._compact_text(f"{deadline_label} — {description}", max_len=190)
                     if item:
-                        tasks.append(item)
+                        entries.append((item, parsed_dt, original_index))
+                        original_index += 1
 
         row_ids = {str(row.get("id")) for row in (email_rows or []) if row.get("id") is not None}
         for item in important_emails:
             if str(item.email_id) in row_ids:
                 continue
             for deadline in item.deadlines:
-                deadline_label = self._normalize_deadline_label(str(deadline), reference_year=reference_year)
+                deadline_text = str(deadline)
+                deadline_label = self._normalize_deadline_label(deadline_text, reference_year=reference_year)
+                parsed_deadline = self._try_parse_deadline(deadline_text, reference_year=reference_year)
+                parsed_dt = parsed_deadline[0] if parsed_deadline else None
                 description = self._compact_text(item.subject or "(No subject)", max_len=120)
                 task = self._compact_text(f"{deadline_label} — {description}", max_len=190)
                 if task:
-                    tasks.append(task)
+                    entries.append((task, parsed_dt, original_index))
+                    original_index += 1
 
-        deduped: list[str] = []
+        deduped: list[tuple[str, datetime | None, int]] = []
         seen: set[str] = set()
-        for task in tasks:
+        for task, parsed_dt, index in entries:
             key = task.casefold()
             if key in seen:
                 continue
             seen.add(key)
-            deduped.append(task)
-            if len(deduped) >= 8:
-                break
+            deduped.append((task, parsed_dt, index))
 
-        return deduped
+        deduped.sort(key=lambda entry: (entry[1] is None, entry[1] or datetime.max, entry[2]))
+
+        return [task for task, _, _ in deduped[:8]]
 
     @staticmethod
     def priority_to_label(priority: int) -> str:
@@ -424,26 +562,6 @@ class TelegramDigestFormatter:
             grouped[category].append(row)
         return grouped
 
-    def _security_count(self, *, email_rows: list[dict] | None, important_emails: list[DigestImportantEmailDetail]) -> int:
-        count = 0
-        row_ids: set[str] = set()
-        for row in email_rows or []:
-            row_id = row.get("id")
-            if row_id is not None:
-                row_ids.add(str(row_id))
-            fields = self._email_fields(row)
-            blob = " ".join([fields["subject"], fields["summary"], fields["recommended_action"]]).casefold()
-            if self._contains_keyword(blob, self._SECURITY_KEYWORDS):
-                count += 1
-        for item in important_emails:
-            if str(item.email_id) in row_ids:
-                continue
-            fields = self._email_fields(item)
-            blob = " ".join([fields["subject"], fields["summary"], fields["reason"], fields["recommended_action"]]).casefold()
-            if self._contains_keyword(blob, self._SECURITY_KEYWORDS):
-                count += 1
-        return count
-
     def _split_actions(self, actions: list[str]) -> tuple[list[str], list[str]]:
         main_actions: list[str] = []
         optional_actions: list[str] = []
@@ -485,6 +603,10 @@ class TelegramDigestFormatter:
 
     def _normalize_deadline_label(self, value: str, *, reference_year: int) -> str:
         text = self._compact_text(value, max_len=120)
+        # Keep explicit ranges readable (for example, "May 27 00:00 to 23:59")
+        # while still allowing range-start parsing for sorting.
+        if re.search(r"(?i)\b(to|until|through|thru)\b", text):
+            return text
         parsed = self._try_parse_deadline(text, reference_year=reference_year)
         if parsed is None:
             return text
@@ -504,15 +626,32 @@ class TelegramDigestFormatter:
         cleaned = re.sub(r"\b(am|pm)\b", lambda m: m.group(1).upper(), cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"(?i)\b(by|before|on)\s+", "", cleaned).strip()
 
+        range_match = re.match(r"(?is)^(?P<start>.+?)\s+(?:to|until|through|thru)\s+(?P<end>.+)$", cleaned)
+        if range_match:
+            start_candidate = range_match.group("start").strip(" ,.-")
+            start_parsed = self._try_parse_deadline(start_candidate, reference_year=reference_year)
+            if start_parsed is not None:
+                return start_parsed
+
         patterns: list[tuple[str, bool]] = [
             ("%a %d %b - %I:%M %p", True),
             ("%a %d %b %I:%M %p", True),
             ("%d %b - %I:%M %p", True),
             ("%d %b %I:%M %p", True),
+            ("%d %B - %I:%M %p", True),
+            ("%d %B %I:%M %p", True),
+            ("%d %b %H:%M", True),
+            ("%d %B %H:%M", True),
             ("%b %d - %I:%M %p", True),
             ("%b %d %I:%M %p", True),
+            ("%b %d, %I:%M %p", True),
+            ("%b %d %H:%M", True),
             ("%B %d - %I:%M %p", True),
             ("%B %d %I:%M %p", True),
+            ("%B %d, %I:%M %p", True),
+            ("%B %d %H:%M", True),
+            ("%d %b", False),
+            ("%d %B", False),
             ("%b %d", False),
             ("%B %d", False),
             ("%Y-%m-%d", False),
@@ -545,15 +684,23 @@ class TelegramDigestFormatter:
     @staticmethod
     def _email_fields(email: DigestImportantEmailDetail | dict) -> dict:
         if isinstance(email, dict):
+            priority_source = email.get("priority_score", email.get("priority", 3))
+            try:
+                priority_score = int(priority_source)
+            except (TypeError, ValueError):
+                priority_score = 3
             return {
                 "subject": str(email.get("subject") or ""),
                 "sender_email": str(email.get("sender_email") or ""),
                 "summary": str(email.get("summary") or email.get("snippet") or ""),
-                "reason": str(email.get("reason") or ""),
+                "reason": str(email.get("reason") or email.get("why_important") or ""),
+                "why_important": str(email.get("why_important") or email.get("reason") or ""),
                 "recommended_action": str(email.get("suggested_action") or ""),
                 "status": str(email.get("status") or ("read" if email.get("is_read") else "unread")),
+                "category": str(email.get("category") or ""),
+                "priority": str(email.get("priority") or ""),
                 "deadlines": [str(item) for item in (email.get("extracted_deadlines") or [])],
-                "priority_score": max(1, min(int(email.get("priority_score", 3)), 5)),
+                "priority_score": max(1, min(priority_score, 5)),
             }
 
         return {
@@ -561,8 +708,11 @@ class TelegramDigestFormatter:
             "sender_email": str(email.sender_email or ""),
             "summary": str(email.summary or ""),
             "reason": str(email.reason or ""),
+            "why_important": str(email.reason or ""),
             "recommended_action": str(email.recommended_action or ""),
             "status": str(email.status or "unknown"),
+            "category": "",
+            "priority": "",
             "deadlines": [str(item) for item in email.deadlines],
             "priority_score": max(1, min(int(email.priority_score), 5)),
         }
