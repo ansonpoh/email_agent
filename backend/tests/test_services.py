@@ -9,6 +9,8 @@ from app.services.agent_service import AgentService
 from app.services.digest_service import DigestService
 from app.services.draft_service import DraftService
 from app.schemas.direct_email_schema import DirectEmailClassificationOutput, DirectEmailDraftOutput
+from app.schemas.followup_schema import FollowupExtractionOutput
+from app.schemas.inbox_schema import InboxQuestionAnswerOutput
 
 
 def _fake_completion(parsed):
@@ -286,6 +288,70 @@ def test_agent_service_classify_direct_email_structured_output(monkeypatch):
     assert result.is_direct_email is True
     assert result.needs_reply is True
     assert result.urgency == "high"
+
+
+def test_agent_service_answer_inbox_question_structured_output(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        return _fake_completion(
+                            InboxQuestionAnswerOutput(
+                                answer="You have two emails needing response.",
+                                citations=[{"source_index": 1, "reason": "Asks a direct question."}],
+                                suggested_actions=["Reply to first email."],
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.answer_inbox_question(
+        question="What needs a reply?",
+        emails=[{"sender_email": "a@example.com", "subject": "Question", "snippet": "Need your response"}],
+        user_timezone="UTC",
+    )
+    assert "needing response" in result.answer
+    assert result.citations[0].source_index == 1
+
+
+def test_agent_service_extract_followups_structured_output(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_max_retries", 1)
+    service = AgentService()
+
+    class _FakeClient:
+        class beta:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def parse(**_kwargs):
+                        return _fake_completion(
+                            FollowupExtractionOutput(
+                                items=[
+                                    {
+                                        "task": "Reply with updated timeline",
+                                        "due_at_iso": "2026-06-02T09:00:00+08:00",
+                                        "due_label": None,
+                                        "needs_reply": True,
+                                        "confidence_score": 0.88,
+                                        "source_quote": "Can you send the timeline by tomorrow morning?",
+                                    }
+                                ]
+                            )
+                        )
+
+    monkeypatch.setattr(service, "_client_instance", lambda: _FakeClient())
+    result = service.extract_followups_from_email(
+        email_content="Please send timeline tomorrow morning",
+        analysis_summary="Sender requested timeline.",
+        user_timezone="Asia/Singapore",
+    )
+    assert result.items[0].task == "Reply with updated timeline"
 
 
 def test_agent_service_classify_direct_email_retries_on_parse_failure(monkeypatch):

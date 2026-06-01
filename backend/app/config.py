@@ -94,6 +94,10 @@ class Settings:
         os.getenv("DIRECT_EMAIL_WATCH_NOTIFY_NO_REPLY", "false"),
         False,
     )
+    ask_inbox_max_emails: int = int(os.getenv("ASK_INBOX_MAX_EMAILS", "30"))
+    followup_reminders_enabled: bool = _parse_bool(os.getenv("FOLLOWUP_REMINDERS_ENABLED", "false"), False)
+    followup_reminder_lead_minutes: int = int(os.getenv("FOLLOWUP_REMINDER_LEAD_MINUTES", "60"))
+    followup_reminder_cooldown_hours: int = int(os.getenv("FOLLOWUP_REMINDER_COOLDOWN_HOURS", "6"))
 
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "CHANGE_ME_WITH_32_CHAR_MIN_SECRET")
     digest_idempotency_window_minutes: int = int(os.getenv("DIGEST_IDEMPOTENCY_WINDOW_MINUTES", "15"))

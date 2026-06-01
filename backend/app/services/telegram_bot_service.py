@@ -15,6 +15,15 @@ from app.services.telegram_service import TelegramService
 
 class TelegramBotService:
     TELEGRAM_MAX_MESSAGE_LEN = 4096
+    QUICK_COMMAND_MAP = {
+        "connect": "/connect",
+        "status": "/status",
+        "latest": "/latest",
+        "today": "/today",
+        "followups": "/followups",
+        "schedule_status": "/schedule status",
+        "help": "/help",
+    }
 
     def __init__(
         self,
@@ -44,6 +53,7 @@ class TelegramBotService:
                 self.telegram_service.send_message(
                     chat_id=chat_id,
                     text=f"Welcome back. Linked to {user.email}. Send /help for commands.",
+                    reply_markup=self.telegram_service.quick_actions_markup(),
                 )
                 return {"ok": True, "message": "start_linked", "user_id": str(user.id)}
 
@@ -73,6 +83,10 @@ class TelegramBotService:
             )
             return {"ok": True, "message": "unlinked_chat"}
 
+        return self._handle_linked_command(db=db, user=user, chat_id=chat_id, text=text)
+
+    def _handle_linked_command(self, db: Session, user: User, chat_id: str, text: str) -> dict:
+
         if text == "/help":
             self.telegram_service.send_message(
                 chat_id=chat_id,
@@ -82,9 +96,12 @@ class TelegramBotService:
                     "/status - show linked account\n"
                     "/latest - show 10 latest primary inbox emails\n"
                     "/today - summarize today's primary inbox emails with AI\n"
+                    "/ask <question> - ask questions about recent inbox emails\n"
+                    "/followups - list unresolved follow-up tasks\n"
+                    "/due-today - list follow-up items due today\n"
                     "/schedule status|country|count|times|on|off - manage scheduled digests\n"
-                    "/pending - list pending approvals\n"
                 ),
+                reply_markup=self.telegram_service.quick_actions_markup(),
             )
             return {"ok": True, "message": "help"}
 
@@ -285,11 +302,80 @@ class TelegramBotService:
             )
             return {"ok": True, "message": "today", "count": int(result.get("count", 0))}
 
-        if text == "/pending":
-            result = self.orchestration_service.send_pending_actions(db=db, user=user)
-            if result.get("pending", 0) == 0:
-                self.telegram_service.send_message(chat_id=chat_id, text="No pending actions.")
-            return {"ok": True, "message": "pending", "result": result}
+        if text == "/followups":
+            rows = self.orchestration_service.list_open_followups(db=db, user=user, limit=10)
+            if not rows:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="No open follow-up items right now.",
+                )
+                return {"ok": True, "message": "followups_empty"}
+
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text=self._truncate_telegram_text(self._format_followup_rows(rows=rows, heading="Open follow-ups")),
+            )
+            return {"ok": True, "message": "followups", "count": len(rows)}
+
+        if text == "/due-today":
+            rows = self.orchestration_service.list_due_today_followups(db=db, user=user, limit=20)
+            if not rows:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="No follow-up items are due today.",
+                )
+                return {"ok": True, "message": "due_today_empty"}
+
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text=self._truncate_telegram_text(self._format_followup_rows(rows=rows, heading="Due today")),
+            )
+            return {"ok": True, "message": "due_today", "count": len(rows)}
+
+        if text == "/ask":
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text="Usage: /ask <question about your inbox>",
+            )
+            return {"ok": True, "message": "ask_usage"}
+
+        if text.startswith("/ask "):
+            question = text.removeprefix("/ask ").strip()
+            if not question:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="Usage: /ask <question about your inbox>",
+                )
+                return {"ok": True, "message": "ask_usage"}
+
+            try:
+                result = self.orchestration_service.answer_inbox_question(db=db, user=user, question=question)
+            except Exception:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="Unable to answer that inbox question right now. Please try again.",
+                )
+                return {"ok": True, "message": "ask_failed"}
+
+            if result.get("empty"):
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="I couldn't find recent Primary Inbox emails to answer that.",
+                )
+                return {"ok": True, "message": "ask_empty"}
+
+            answer_lines = [f"Q: {question}", "", f"A: {result.get('answer') or 'No answer available.'}"]
+            citations = list(result.get("citations") or [])
+            if citations:
+                answer_lines.append("")
+                answer_lines.append("Sources:")
+                answer_lines.extend(f"- {line}" for line in citations[:5])
+
+            self.telegram_service.send_message(
+                chat_id=chat_id,
+                text=self._truncate_telegram_text("\n".join(answer_lines)),
+            )
+            return {"ok": True, "message": "ask_answered", "count": int(result.get("count", 0))}
 
         self.telegram_service.send_message(chat_id=chat_id, text="Unknown command. Send /help.")
         return {"ok": True, "message": "unknown_command"}
@@ -299,6 +385,38 @@ class TelegramBotService:
         callback_query_id = str(callback.get("id") or "")
         message = callback.get("message") or {}
         chat_id = str((message.get("chat") or {}).get("id") or "")
+
+        if data.startswith("cmd:"):
+            command_key = data.removeprefix("cmd:").strip()
+            command_text = self.QUICK_COMMAND_MAP.get(command_key)
+            if not command_text or not chat_id:
+                if callback_query_id:
+                    self.telegram_service.answer_callback_query(callback_query_id, "Unknown command.")
+                return {"ok": True, "message": "unknown_callback_command"}
+
+            if callback_query_id:
+                self.telegram_service.answer_callback_query(callback_query_id, "Running command...")
+
+            if command_text == "/connect":
+                state = self.auth_state_service.create(chat_id=chat_id)
+                auth_url = self.gmail_service.get_google_oauth_start_url(state=state)
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="Connect your Gmail account:",
+                    reply_markup={"inline_keyboard": [[{"text": "Connect Gmail", "url": auth_url}]]},
+                )
+                return {"ok": True, "message": "connect_prompted"}
+
+            user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+            if not user:
+                self.telegram_service.send_message(
+                    chat_id=chat_id,
+                    text="This chat is not linked. Send /connect to connect Gmail.",
+                )
+                return {"ok": True, "message": "unlinked_callback_chat"}
+
+            return self._handle_linked_command(db=db, user=user, chat_id=chat_id, text=command_text)
+
         if not data or ":" not in data or not chat_id:
             if callback_query_id:
                 self.telegram_service.answer_callback_query(callback_query_id, "Invalid action.")
@@ -468,3 +586,11 @@ class TelegramBotService:
         if max_body_length <= 0:
             return text[: cls.TELEGRAM_MAX_MESSAGE_LEN]
         return text[:max_body_length].rstrip() + suffix
+
+    @staticmethod
+    def _format_followup_rows(*, rows: list, heading: str) -> str:
+        lines = [heading]
+        for idx, row in enumerate(rows, start=1):
+            due_label = row.due_at.strftime("%Y-%m-%d %H:%M UTC") if row.due_at else (row.due_label or "No due time")
+            lines.append(f"{idx}. {row.task_text} | due: {due_label}")
+        return "\n".join(lines)

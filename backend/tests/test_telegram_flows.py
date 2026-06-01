@@ -131,3 +131,13 @@ def test_telegram_approval_markup_shape():
     buttons = markup["inline_keyboard"][0]
     assert buttons[0]["callback_data"] == "approve:abc-123"
     assert buttons[1]["callback_data"] == "reject:abc-123"
+
+
+def test_telegram_quick_actions_markup_shape():
+    markup = TelegramService.quick_actions_markup()
+    keyboard = markup["inline_keyboard"]
+    assert keyboard[0][0]["callback_data"] == "cmd:today"
+    assert keyboard[0][1]["callback_data"] == "cmd:latest"
+    assert keyboard[1][0]["callback_data"] == "cmd:status"
+    assert keyboard[1][1]["callback_data"] == "cmd:followups"
+    assert keyboard[2][0]["callback_data"] == "cmd:schedule_status"

@@ -3,6 +3,7 @@ from app.services.agent_service import AgentService
 from app.services.digest_service import DigestService
 from app.services.direct_email_watcher_service import DirectEmailWatcherService
 from app.services.draft_service import DraftService
+from app.services.followup_service import FollowupService
 from app.services.gmail_service import GmailService
 from app.services.pipeline_service import PipelineService
 from app.services.telegram_auth_state_service import TelegramAuthStateService
@@ -34,12 +35,14 @@ direct_email_watcher_service = DirectEmailWatcherService(
     formatter=telegram_direct_email_formatter,
 )
 telegram_auth_state_service = TelegramAuthStateService()
+followup_service = FollowupService()
 telegram_orchestration_service = TelegramOrchestrationService(
     pipeline_service=pipeline_service,
     agent_service=agent_service,
     telegram_service=telegram_service,
     action_execution_service=action_execution_service,
     telegram_digest_formatter=telegram_digest_formatter,
+    followup_service=followup_service,
 )
 telegram_bot_service = TelegramBotService(
     telegram_service=telegram_service,

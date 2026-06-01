@@ -173,6 +173,7 @@ def run_telegram_cycle(*, now_utc: datetime | None = None, grace_minutes: int | 
     )
     completed = 0
     sent_digests = 0
+    followup_reminders_sent = 0
     failed: list[dict] = []
 
     try:
@@ -212,10 +213,25 @@ def run_telegram_cycle(*, now_utc: datetime | None = None, grace_minutes: int | 
                 db.rollback()
                 logger.exception("run_hourly_telegram_cycle user failure user_id=%s", user.id)
                 failed.append({"user_id": str(user.id), "error": str(exc)})
+
+        if settings.followup_reminders_enabled:
+            linked_users = db.query(User).filter(User.telegram_chat_id.is_not(None)).all()
+            for user in linked_users:
+                try:
+                    followup_reminders_sent += telegram_orchestration_service.send_due_followup_reminders(
+                        db=db,
+                        user=user,
+                        now_utc=now,
+                    )
+                except Exception as exc:
+                    logger.exception("followup_reminder_cycle user failure user_id=%s", user.id)
+                    failed.append({"user_id": str(user.id), "error": f"followup_reminder_failed: {exc}"})
+
         return {
             "status": "completed",
             "processed_users": completed,
             "sent_digests": sent_digests,
+            "followup_reminders_sent": followup_reminders_sent,
             "failed": failed,
         }
     finally:

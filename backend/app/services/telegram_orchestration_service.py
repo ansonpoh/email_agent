@@ -10,10 +10,12 @@ from app.config import settings
 from app.models.agent_action import AgentAction
 from app.models.email import Email
 from app.models.email_analysis import EmailAnalysis
+from app.models.followup_item import FollowupItem
 from app.models.scheduled_run import ScheduledRun
 from app.models.user import User
 from app.services.action_execution_service import ActionExecutionService
 from app.services.agent_service import AgentService
+from app.services.followup_service import FollowupService
 from app.services.pipeline_service import PipelineService
 from app.services.telegram_digest_formatter import TelegramDigestFormatter
 from app.services.telegram_service import TelegramService
@@ -31,12 +33,14 @@ class TelegramOrchestrationService:
         telegram_service: TelegramService,
         action_execution_service: ActionExecutionService,
         telegram_digest_formatter: TelegramDigestFormatter,
+        followup_service: FollowupService,
     ):
         self.pipeline_service = pipeline_service
         self.agent_service = agent_service
         self.telegram_service = telegram_service
         self.action_execution_service = action_execution_service
         self.telegram_digest_formatter = telegram_digest_formatter
+        self.followup_service = followup_service
 
     def sync_and_analyze(self, db: Session, user: User) -> dict:
         sync_result = self.pipeline_service.sync_user_emails(db=db, user=user)
@@ -52,6 +56,7 @@ class TelegramOrchestrationService:
                 email_row=email_row,
                 user_rules=[],
             )
+            self._sync_followups_for_email(db=db, user=user, email_row=email_row, analysis=analysis)
             analysed += 1
             if self._maybe_send_urgent_alert(db=db, user=user, email_row=email_row, analysis=analysis, action_row=action_row):
                 urgent_alerts += 1
@@ -71,8 +76,66 @@ class TelegramOrchestrationService:
             email_row=email_row,
             user_rules=[],
         )
+        self._sync_followups_for_email(db=db, user=user, email_row=email_row, analysis=analysis)
         self._maybe_send_urgent_alert(db=db, user=user, email_row=email_row, analysis=analysis, action_row=action_row)
         return analysis, action_row
+
+    def answer_inbox_question(self, *, db: Session, user: User, question: str) -> dict:
+        rows = self.pipeline_service.gmail_service.fetch_latest_primary_inbox(
+            user=user,
+            db=db,
+            limit=max(1, min(settings.ask_inbox_max_emails, 50)),
+        )
+        if not rows:
+            return {"empty": True, "count": 0}
+
+        answer = self.agent_service.answer_inbox_question(
+            question=question,
+            emails=rows,
+            user_timezone=user.timezone or "UTC",
+        )
+
+        citation_lines: list[str] = []
+        for citation in answer.citations[:5]:
+            source_index = citation.source_index
+            if source_index < 1 or source_index > len(rows):
+                continue
+            row = rows[source_index - 1]
+            sender = str(row.get("sender_email") or "unknown@example.com")
+            subject = str(row.get("subject") or "(No subject)")
+            citation_lines.append(f"{source_index}. {sender} | {subject} ({citation.reason})")
+
+        return {
+            "empty": False,
+            "count": len(rows),
+            "answer": answer.answer.strip(),
+            "citations": citation_lines,
+            "suggested_actions": [item.strip() for item in answer.suggested_actions if item.strip()][:3],
+        }
+
+    def list_open_followups(self, *, db: Session, user: User, limit: int = 10) -> list[FollowupItem]:
+        return self.followup_service.list_open_followups(db=db, user=user, limit=limit)
+
+    def list_due_today_followups(self, *, db: Session, user: User, limit: int = 20) -> list[FollowupItem]:
+        return self.followup_service.list_due_today(db=db, user=user, limit=limit)
+
+    def send_due_followup_reminders(self, *, db: Session, user: User, now_utc: datetime | None = None) -> int:
+        if not settings.followup_reminders_enabled:
+            return 0
+        if not user.telegram_chat_id:
+            return 0
+
+        due_rows = self.followup_service.list_due_for_reminder(db=db, user=user, now_utc=now_utc)
+        if not due_rows:
+            return 0
+
+        text = self._format_due_followup_reminder_text(rows=due_rows, timezone_name=user.timezone or "UTC")
+        sent = self.telegram_service.send_message(chat_id=user.telegram_chat_id, text=self._truncate_telegram_text(text))
+        if not sent:
+            return 0
+
+        self.followup_service.mark_reminded(db=db, rows=due_rows, reminded_at_utc=now_utc)
+        return len(due_rows)
 
     def generate_and_send_digest(
         self,
@@ -122,44 +185,6 @@ class TelegramOrchestrationService:
         db.add(digest)
         db.commit()
         return {"sent": True, "digest_id": str(digest.id), "idempotent_reuse": result["idempotent_reuse"]}
-
-    def send_pending_actions(self, db: Session, user: User) -> dict:
-        if not user.telegram_chat_id:
-            return {"sent": 0, "reason": "telegram_not_linked"}
-
-        actions = (
-            db.query(AgentAction)
-            .join(AgentAction.email)
-            .filter(AgentAction.status == "pending")
-            .filter(AgentAction.email.has(user_id=user.id))
-            .order_by(AgentAction.created_at.desc())
-            .all()
-        )
-
-        sent = 0
-        for action in actions:
-            email_row = action.email
-            text = (
-                f"Pending action: {action.action_type}\n"
-                f"Email: {(email_row.subject or '(No subject)')}\n"
-                f"Sender: {email_row.sender_email}\n"
-                f"Suggestion: {action.suggested_payload.get('suggested_action', 'Review in app')}"
-            )
-            callback_data = f"approve:{action.id}"
-            result = self.telegram_service.send_message(
-                chat_id=user.telegram_chat_id,
-                text=text,
-                reply_markup=self.telegram_service.approval_markup(str(action.id)),
-            )
-            if result:
-                action.telegram_chat_id = user.telegram_chat_id
-                action.telegram_message_id = str(result.get("message_id"))
-                action.telegram_callback_data = callback_data
-                db.add(action)
-                sent += 1
-
-        db.commit()
-        return {"sent": sent, "pending": len(actions)}
 
     def generate_today_summary(self, db: Session, user: User) -> dict:
         timezone_name = user.timezone or "UTC"
@@ -345,6 +370,49 @@ class TelegramOrchestrationService:
             db.add(action_row)
         db.commit()
         return True
+
+    def _sync_followups_for_email(self, *, db: Session, user: User, email_row: Email, analysis: EmailAnalysis) -> None:
+        email_content = (
+            f"From: {email_row.sender_name or ''} <{email_row.sender_email}>\n"
+            f"Subject: {email_row.subject or '(No subject)'}\n"
+            f"Received: {email_row.received_at.isoformat() if email_row.received_at else ''}\n\n"
+            f"{email_row.body_text}"
+        )
+        extracted_items = None
+        try:
+            extracted = self.agent_service.extract_followups_from_email(
+                email_content=email_content,
+                analysis_summary=analysis.summary,
+                user_timezone=user.timezone or "UTC",
+            )
+            extracted_items = extracted.items
+        except Exception as exc:
+            logger.warning(
+                "followup_extraction_failed user_id=%s email_id=%s error=%s",
+                user.id,
+                email_row.id,
+                exc,
+            )
+
+        self.followup_service.sync_email_followups(
+            db=db,
+            user=user,
+            email_row=email_row,
+            analysis=analysis,
+            extracted_items=extracted_items,
+        )
+
+    @staticmethod
+    def _format_due_followup_reminder_text(*, rows: list[FollowupItem], timezone_name: str) -> str:
+        lines = [
+            "Follow-up reminders",
+            f"Timezone: {timezone_name}",
+            "",
+        ]
+        for idx, row in enumerate(rows, start=1):
+            due_label = row.due_at.strftime("%Y-%m-%d %H:%M %Z") if row.due_at else (row.due_label or "No due time")
+            lines.append(f"{idx}. {row.task_text} (due: {due_label})")
+        return "\n".join(lines)
 
     @classmethod
     def _truncate_telegram_text(cls, text: str) -> str:

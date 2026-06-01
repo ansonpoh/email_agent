@@ -91,13 +91,15 @@ Notes:
 5. Operate through Telegram:
    - `/status`
    - `/today`
+   - `/ask <question>`
+   - `/followups`
+   - `/due-today`
    - `/schedule country <country>`
    - `/schedule count <1-3>`
    - `/schedule times <8am,1pm[,6pm]>`
    - `/schedule status`
    - `/schedule on`
    - `/schedule off`
-   - `/pending`
 
 ## Telegram Webhook
 - Set `TELEGRAM_WEBHOOK_BASE_URL` to your public HTTPS backend URL.
@@ -135,13 +137,21 @@ curl.exe -sS "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 - `POST /digests/generate`
 - `GET /digests/latest`
 - `POST /digests/{digest_id}/send-telegram`
-- `GET /actions/pending`
 - `POST /actions/{action_id}/approve`
 - `POST /actions/{action_id}/reject`
 - `POST /drafts/generate`
 - `POST /drafts/{draft_id}/create-in-gmail`
 - `POST /telegram/webhook`
 - `POST /telegram/test`
+
+## Follow-up Tracking
+- The assistant extracts commitments/tasks from analyzed emails and stores open follow-up items.
+- Use `/followups` to list unresolved follow-up items.
+- Use `/due-today` to show follow-ups due in your current timezone day.
+- Optional proactive reminders:
+  - `FOLLOWUP_REMINDERS_ENABLED=true`
+  - `FOLLOWUP_REMINDER_LEAD_MINUTES=60`
+  - `FOLLOWUP_REMINDER_COOLDOWN_HOURS=6`
 
 ## Security Notes
 - Do not commit `.env`.

@@ -4,6 +4,8 @@ from pydantic import ValidationError
 from app.schemas.agent_schema import DraftReplyOutput
 from app.schemas.digest_schema import DigestImportantEmail, DigestOutput
 from app.schemas.email_schema import EmailAnalysisOutput
+from app.schemas.followup_schema import FollowupExtractionOutput
+from app.schemas.inbox_schema import InboxQuestionAnswerOutput
 
 
 def test_email_analysis_output_validates_ranges():
@@ -106,3 +108,29 @@ def test_draft_reply_output_requires_user_review_field():
         requires_user_review=True,
     )
     assert draft.requires_user_review is True
+
+
+def test_followup_extraction_limits_items():
+    with pytest.raises(ValidationError):
+        FollowupExtractionOutput(
+            items=[
+                {
+                    "task": f"Task {idx}",
+                    "due_at_iso": None,
+                    "due_label": None,
+                    "needs_reply": False,
+                    "confidence_score": 0.5,
+                    "source_quote": None,
+                }
+                for idx in range(9)
+            ]
+        )
+
+
+def test_inbox_answer_citation_source_index_must_be_positive():
+    with pytest.raises(ValidationError):
+        InboxQuestionAnswerOutput(
+            answer="x",
+            citations=[{"source_index": 0, "reason": "bad"}],
+            suggested_actions=[],
+        )

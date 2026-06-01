@@ -61,10 +61,25 @@ class _FakeDb:
 class _FakeTelegramService:
     def __init__(self):
         self.messages = []
+        self.callback_answers = []
 
-    def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None):
+    @staticmethod
+    def quick_actions_markup():
+        return {
+            "inline_keyboard": [
+                [{"text": "Today", "callback_data": "cmd:today"}, {"text": "Latest", "callback_data": "cmd:latest"}],
+                [{"text": "Status", "callback_data": "cmd:status"}, {"text": "Follow-ups", "callback_data": "cmd:followups"}],
+                [{"text": "Schedule", "callback_data": "cmd:schedule_status"}],
+            ]
+        }
+
+    def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None, parse_mode: str | None = None):
         self.messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
         return {"message_id": 1}
+
+    def answer_callback_query(self, callback_query_id: str, text: str):
+        self.callback_answers.append({"id": callback_query_id, "text": text})
+        return True
 
 
 class _FakeGmailService:
@@ -89,9 +104,21 @@ class _FakeAuthStateService:
 
 
 class _FakeOrchestrationService:
-    def __init__(self, today_result=None, raise_on_today: bool = False):
+    def __init__(
+        self,
+        today_result=None,
+        raise_on_today: bool = False,
+        followups=None,
+        due_today=None,
+        ask_result=None,
+        raise_on_ask: bool = False,
+    ):
         self.today_result = today_result
         self.raise_on_today = raise_on_today
+        self.followups = followups or []
+        self.due_today = due_today or []
+        self.ask_result = ask_result
+        self.raise_on_ask = raise_on_ask
 
     def generate_today_summary(self, db, user):
         if self.raise_on_today:
@@ -106,6 +133,24 @@ class _FakeOrchestrationService:
             "end_local": datetime(2026, 5, 26, 0, 0, tzinfo=timezone.utc),
         }
 
+    def list_open_followups(self, db, user, limit=10):
+        return self.followups[:limit]
+
+    def list_due_today_followups(self, db, user, limit=20):
+        return self.due_today[:limit]
+
+    def answer_inbox_question(self, db, user, question: str):
+        if self.raise_on_ask:
+            raise RuntimeError("ask failed")
+        if self.ask_result is not None:
+            return self.ask_result
+        return {
+            "empty": False,
+            "count": 2,
+            "answer": f"Answer for: {question}",
+            "citations": ["1. alice@example.com | Subject A (Relevant context)"],
+            "suggested_actions": ["Reply to Alice"],
+        }
 
 def _linked_user(chat_id: str):
     return SimpleNamespace(
@@ -171,10 +216,129 @@ def test_help_lists_latest_command():
     assert result["message"] == "help"
     assert "/latest - show 10 latest primary inbox emails" in telegram.messages[-1]["text"]
     assert "/today - summarize today's primary inbox emails with AI" in telegram.messages[-1]["text"]
+    assert "/ask <question> - ask questions about recent inbox emails" in telegram.messages[-1]["text"]
+    assert "/followups - list unresolved follow-up tasks" in telegram.messages[-1]["text"]
+    assert "/due-today - list follow-up items due today" in telegram.messages[-1]["text"]
     assert "/sync - sync inbox and analyze new messages" not in telegram.messages[-1]["text"]
     assert "/digest - send latest digest" not in telegram.messages[-1]["text"]
     assert "/timezone set <IANA>" not in telegram.messages[-1]["text"]
     assert "/rules - list active rules" not in telegram.messages[-1]["text"]
+    buttons = telegram.messages[-1]["reply_markup"]["inline_keyboard"]
+    assert buttons[0][0]["callback_data"] == "cmd:today"
+    assert buttons[0][1]["callback_data"] == "cmd:latest"
+
+
+def test_start_linked_includes_quick_action_buttons():
+    user = _linked_user("2020")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/start", "chat": {"id": "2020"}}})
+    assert result["message"] == "start_linked"
+    markup = telegram.messages[-1]["reply_markup"]
+    assert markup["inline_keyboard"][1][0]["callback_data"] == "cmd:status"
+    assert markup["inline_keyboard"][1][1]["callback_data"] == "cmd:followups"
+
+
+def test_callback_quick_command_status_dispatches():
+    user = _linked_user("2121")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={
+            "callback_query": {
+                "id": "cb-1",
+                "data": "cmd:status",
+                "message": {"chat": {"id": "2121"}},
+            }
+        },
+    )
+
+    assert result["message"] == "status"
+    assert telegram.callback_answers[-1]["id"] == "cb-1"
+    assert telegram.messages[-1]["text"] == "Linked account: linked@example.com"
+
+
+def test_followups_command_lists_open_items():
+    user = _linked_user("3331")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    followups = [
+        SimpleNamespace(task_text="Reply to Alice about contract", due_at=datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc), due_label=None),
+        SimpleNamespace(task_text="Share updated proposal", due_at=None, due_label="this week"),
+    ]
+    orchestration = _FakeOrchestrationService(followups=followups)
+    service = _build_service(telegram, orchestration=orchestration)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/followups", "chat": {"id": "3331"}}})
+    assert result["message"] == "followups"
+    text = telegram.messages[-1]["text"]
+    assert "Open follow-ups" in text
+    assert "Reply to Alice about contract" in text
+    assert "Share updated proposal" in text
+
+
+def test_due_today_command_lists_items():
+    user = _linked_user("3332")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    due_today = [
+        SimpleNamespace(task_text="Send budget draft", due_at=datetime(2026, 5, 26, 2, 0, tzinfo=timezone.utc), due_label=None),
+    ]
+    orchestration = _FakeOrchestrationService(due_today=due_today)
+    service = _build_service(telegram, orchestration=orchestration)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/due-today", "chat": {"id": "3332"}}})
+    assert result["message"] == "due_today"
+    assert "Due today" in telegram.messages[-1]["text"]
+    assert "Send budget draft" in telegram.messages[-1]["text"]
+
+
+def test_ask_command_answers_with_sources():
+    user = _linked_user("3333")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    orchestration = _FakeOrchestrationService(
+        ask_result={
+            "empty": False,
+            "count": 3,
+            "answer": "The hiring manager asked for availability this week.",
+            "citations": ["1. hr@company.com | Interview follow-up (Contains scheduling request)"],
+            "suggested_actions": ["Reply with 3 time slots."],
+        }
+    )
+    service = _build_service(telegram, orchestration=orchestration)
+
+    result = service.handle_update(db=db, update={"message": {"text": "/ask what needs reply today?", "chat": {"id": "3333"}}})
+    assert result["message"] == "ask_answered"
+    text = telegram.messages[-1]["text"]
+    assert "Q: what needs reply today?" in text
+    assert "Sources:" in text
+    assert "Suggested actions:" not in text
+
+
+def test_callback_unknown_quick_command_returns_error():
+    user = _linked_user("2222")
+    db = _FakeDb(users=[user])
+    telegram = _FakeTelegramService()
+    service = _build_service(telegram)
+
+    result = service.handle_update(
+        db=db,
+        update={
+            "callback_query": {
+                "id": "cb-2",
+                "data": "cmd:not-real",
+                "message": {"chat": {"id": "2222"}},
+            }
+        },
+    )
+    assert result["message"] == "unknown_callback_command"
+    assert telegram.callback_answers[-1]["text"] == "Unknown command."
 
 
 def test_latest_returns_compact_lines():

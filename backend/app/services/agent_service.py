@@ -9,6 +9,8 @@ from app.config import settings
 from app.schemas.digest_schema import AIDigestSummaryOutput
 from app.schemas.direct_email_schema import DirectEmailClassificationOutput, DirectEmailDraftOutput
 from app.schemas.email_schema import EmailAnalysisOutput, TodaySummaryOutput
+from app.schemas.followup_schema import FollowupExtractionOutput
+from app.schemas.inbox_schema import InboxQuestionAnswerOutput
 
 
 class AgentService:
@@ -135,6 +137,78 @@ class AgentService:
         raise HTTPException(
             status_code=502,
             detail=f"OpenAI direct-email classification failed after retries: {last_error}",
+        )
+
+    def answer_inbox_question(self, *, question: str, emails: list[dict], user_timezone: str) -> InboxQuestionAnswerOutput:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.1,
+                    messages=self._inbox_question_messages(question=question, emails=emails, user_timezone=user_timezone),
+                    response_format=InboxQuestionAnswerOutput,
+                )
+
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed inbox answer was empty.")
+                return parsed
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning("OpenAI answer_inbox_question attempt %s/%s failed: %s", attempt, max_attempts, exc)
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI inbox question answering failed after retries: {last_error}",
+        )
+
+    def extract_followups_from_email(
+        self,
+        *,
+        email_content: str,
+        analysis_summary: str,
+        user_timezone: str,
+    ) -> FollowupExtractionOutput:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not configured.")
+
+        max_attempts = max(settings.openai_max_retries + 1, 1)
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                completion = self._client_instance().beta.chat.completions.parse(
+                    model=settings.openai_model,
+                    temperature=0.1,
+                    messages=self._followup_extraction_messages(
+                        email_content=email_content,
+                        analysis_summary=analysis_summary,
+                        user_timezone=user_timezone,
+                    ),
+                    response_format=FollowupExtractionOutput,
+                )
+                parsed = completion.choices[0].message.parsed
+                if parsed is None:
+                    raise ValueError("OpenAI parsed followup extraction was empty.")
+                return parsed
+            except (APITimeoutError, RateLimitError, APIError, ValueError) as exc:
+                last_error = exc
+                self.logger.warning(
+                    "OpenAI extract_followups_from_email attempt %s/%s failed: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI followup extraction failed after retries: {last_error}",
         )
 
     def generate_direct_email_reply(
@@ -347,6 +421,73 @@ class AgentService:
                 "content": (
                     f"Original email:\n{email_content}\n\n"
                     f"Classification:\n{classification_json}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _inbox_question_messages(question: str, emails: list[dict], user_timezone: str) -> list[dict[str, Any]]:
+        lines: list[str] = []
+        for idx, row in enumerate(emails, start=1):
+            sender = str(row.get("sender_email") or "unknown@example.com")
+            subject = str(row.get("subject") or "(No subject)")
+            received_at = row.get("received_at")
+            received_label = str(received_at) if received_at is not None else "unknown"
+            snippet = str(row.get("snippet") or row.get("body_text") or "").replace("\n", " ").strip()
+            if len(snippet) > 260:
+                snippet = snippet[:260].rstrip() + "..."
+            lines.append(
+                f"{idx}. from={sender}; subject={subject}; received={received_label}; content={snippet}"
+            )
+
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You answer user questions about their inbox. "
+                    "Only use provided email facts. "
+                    "If facts are insufficient, say so clearly. "
+                    "Keep answer concise and practical. "
+                    "citations must reference valid source_index values from email facts."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Timezone: {user_timezone}\n"
+                    f"Question: {question}\n"
+                    f"Emails available: {len(emails)}\n\n"
+                    "Email facts:\n"
+                    + ("\n".join(lines) if lines else "(none)")
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _followup_extraction_messages(
+        *,
+        email_content: str,
+        analysis_summary: str,
+        user_timezone: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Extract actionable follow-up commitments from this email. "
+                    "Focus on tasks, promises, and response obligations that should be tracked. "
+                    "Return no more than 5 items. "
+                    "If a concrete due date/time is present, output due_at_iso in ISO-8601 format with timezone. "
+                    "If no concrete due date/time is present, leave due_at_iso null and optionally set due_label. "
+                    "Do not invent dates."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"User timezone: {user_timezone}\n"
+                    f"Email analysis summary: {analysis_summary}\n\n"
+                    f"Email content:\n{email_content}"
                 ),
             },
         ]

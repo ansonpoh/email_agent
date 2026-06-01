@@ -103,6 +103,24 @@ class TelegramService:
             ]
         }
 
+    @staticmethod
+    def quick_actions_markup() -> dict:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "Today", "callback_data": "cmd:today"},
+                    {"text": "Latest", "callback_data": "cmd:latest"},
+                ],
+                [
+                    {"text": "Status", "callback_data": "cmd:status"},
+                    {"text": "Follow-ups", "callback_data": "cmd:followups"},
+                ],
+                [
+                    {"text": "Schedule", "callback_data": "cmd:schedule_status"},
+                ],
+            ]
+        }
+
     def _post(self, method: str, payload: dict) -> dict:
         url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}"
         with httpx.Client(timeout=10) as client:

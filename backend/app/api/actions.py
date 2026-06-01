@@ -11,19 +11,6 @@ from app.models.agent_action import AgentAction
 router = APIRouter(prefix="/actions", tags=["actions"])
 
 
-@router.get("/pending")
-def pending_actions(user_id: UUID, db: Session = Depends(get_db)):
-    rows = (
-        db.query(AgentAction)
-        .join(AgentAction.email)
-        .filter(AgentAction.status == "pending")
-        .filter(AgentAction.email.has(user_id=user_id))
-        .order_by(AgentAction.created_at.desc())
-        .all()
-    )
-    return {"items": rows}
-
-
 @router.post("/{action_id}/approve")
 def approve_action(action_id: UUID, execute: bool = True, db: Session = Depends(get_db)):
     row = db.query(AgentAction).filter(AgentAction.id == action_id).first()

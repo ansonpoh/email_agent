@@ -36,3 +36,4 @@ class Email(Base):
     actions = relationship("AgentAction", back_populates="email", cascade="all, delete-orphan")
     drafts = relationship("DraftReply", back_populates="email", cascade="all, delete-orphan")
     direct_watch_events = relationship("DirectEmailWatchEvent", back_populates="email", cascade="all, delete-orphan")
+    followup_items = relationship("FollowupItem", back_populates="email", cascade="all, delete-orphan")
